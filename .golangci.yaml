@@ -1,0 +1,21 @@
+version: "2"
+
+formatters:
+  enable:
+    - gci
+    - gofumpt
+
+linters:
+  enable:
+    - errcheck
+    - goconst
+    - gocyclo
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - prealloc
+    - revive
+    - staticcheck
+    - unparam
+    - unused
