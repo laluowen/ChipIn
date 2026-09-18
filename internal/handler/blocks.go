@@ -18,9 +18,15 @@ func markdown(s string) *slack.TextBlockObject {
 	return slack.NewTextBlockObject(slack.MarkdownType, s, false, false)
 }
 
-// headerBlocks are the title/context lines common to every render.
+// headerBlocks are the title/context lines common to every render. The issue
+// identifier links back to Linear when a URL is known, so the round always
+// carries a path back to the source issue.
 func (h *PokerHandler) headerBlocks(sess *store.PokerSession) []slack.Block {
-	title := fmt.Sprintf("%s — %s", sess.Identifier, sess.Title)
+	id := sess.Identifier
+	if sess.IssueURL != "" {
+		id = fmt.Sprintf("<%s|%s>", sess.IssueURL, sess.Identifier)
+	}
+	title := fmt.Sprintf("%s — %s", id, sess.Title)
 	return []slack.Block{
 		slack.NewHeaderBlock(plainText("Planning Poker")),
 		slack.NewSectionBlock(markdown("*"+title+"*"), nil, nil),
@@ -45,10 +51,10 @@ func (h *PokerHandler) votingBlocks(sess *store.PokerSession) []slack.Block {
 	}
 	blocks = append(blocks, slack.NewContextBlock("", markdown(status)))
 
-	// Vote buttons, chunked into rows of five (Slack allows up to 5 per action block... actually 25, but 5 reads well).
+	// One vote button per scale point, chunked into rows of five.
 	var elems []slack.BlockElement
-	for _, label := range h.Scale {
-		btn := slack.NewButtonBlockElement(actionVotePrefix+label, sess.IssueID, plainText(label))
+	for _, p := range sess.Scale {
+		btn := slack.NewButtonBlockElement(actionVotePrefix+p.Label, sess.IssueID, plainText(p.Label))
 		elems = append(elems, btn)
 	}
 	blocks = append(blocks, chunkActions(elems, 5)...)
@@ -79,21 +85,44 @@ func (h *PokerHandler) summaryBlocks(sess *store.PokerSession) []slack.Block {
 		blocks = append(blocks, slack.NewSectionBlock(markdown(joinLines(lines)), nil, nil))
 	}
 
-	label, _, ok := h.Scale.Consensus(sess.Votes)
+	consensus, ok := sess.Scale.Consensus(sess.Votes)
 	if ok {
 		blocks = append(blocks, slack.NewContextBlock("",
-			markdown(fmt.Sprintf("Recommended estimate: *%s*", label))))
+			markdown(fmt.Sprintf("Recommended estimate: *%s* — adjust below if you like.", consensus.Label))))
 	} else {
 		blocks = append(blocks, slack.NewContextBlock("",
-			markdown("_No numeric votes — nothing to estimate yet._")))
+			markdown("_No votes cast — pick an estimate below to set one anyway._")))
+	}
+
+	// Estimate dropdown, prefilled to the recommendation (or the first point
+	// when there were no votes). The picker lets the team override the computed
+	// value after discussion; whatever is selected here is what "Set estimate"
+	// writes to Linear.
+	initial := consensus
+	if !ok && len(sess.Scale) > 0 {
+		initial = sess.Scale[0]
+	}
+	if len(sess.Scale) > 0 {
+		opts := make([]*slack.OptionBlockObject, 0, len(sess.Scale))
+		var initialOpt *slack.OptionBlockObject
+		for _, p := range sess.Scale {
+			o := slack.NewOptionBlockObject(p.Label, plainText(p.Label), nil)
+			opts = append(opts, o)
+			if p.Label == initial.Label {
+				initialOpt = o
+			}
+		}
+		sel := slack.NewOptionsSelectBlockElement(slack.OptTypeStatic,
+			plainText("Choose estimate"), actionEstimateSelect, opts...)
+		if initialOpt != nil {
+			sel = sel.WithInitialOption(initialOpt)
+		}
+		blocks = append(blocks, slack.NewActionBlock(blockEstimate, sel))
 	}
 
 	cont := slack.NewButtonBlockElement(actionContinue, sess.IssueID, plainText("Continue voting"))
 	set := slack.NewButtonBlockElement(actionSetEstimate, sess.IssueID, plainText("Set estimate"))
 	set.Style = slack.StylePrimary
-	if !ok {
-		set.Style = slack.StyleDefault
-	}
 	cancel := slack.NewButtonBlockElement(actionCancel, sess.IssueID, plainText("Cancel"))
 	cancel.Style = slack.StyleDanger
 	blocks = append(blocks, slack.NewActionBlock("controls", cont, set, cancel))

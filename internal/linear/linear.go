@@ -53,15 +53,23 @@ func New(token string, opts ...Option) *Client {
 	return c
 }
 
-// Issue is the subset of a Linear issue ChipIn cares about.
+// Issue is the subset of a Linear issue ChipIn cares about, including the
+// owning team's estimation settings (used to build the vote scale).
 type Issue struct {
 	ID         string // UUID
 	Identifier string // e.g. "ENG-123"
 	Title      string
+	URL        string   // Linear app URL for the issue, e.g. https://linear.app/acme/issue/ENG-123
 	Estimate   *float64 // nil when unestimated
+
+	// Team estimation settings.
+	EstimationType      string // exponential | fibonacci | linear | tShirt | notUsed
+	EstimationExtended  bool
+	EstimationAllowZero bool
 }
 
-// FetchIssue looks up an issue by its human identifier (e.g. "ENG-123").
+// FetchIssue looks up an issue by its human identifier (e.g. "ENG-123") or a
+// pasted Linear URL, returning the issue and its team's estimation settings.
 func (c *Client) FetchIssue(ctx context.Context, identifier string) (*Issue, error) {
 	teamKey, number, err := parseIdentifier(identifier)
 	if err != nil {
@@ -70,7 +78,10 @@ func (c *Client) FetchIssue(ctx context.Context, identifier string) (*Issue, err
 
 	const query = `query($team:String!,$number:Float!){
 		issues(filter:{team:{key:{eq:$team}},number:{eq:$number}}, first:1){
-			nodes{ id identifier title estimate }
+			nodes{
+				id identifier title url estimate
+				team{ issueEstimationType issueEstimationExtended issueEstimationAllowZero }
+			}
 		}
 	}`
 	vars := map[string]any{"team": teamKey, "number": number}
@@ -81,7 +92,13 @@ func (c *Client) FetchIssue(ctx context.Context, identifier string) (*Issue, err
 				ID         string   `json:"id"`
 				Identifier string   `json:"identifier"`
 				Title      string   `json:"title"`
+				URL        string   `json:"url"`
 				Estimate   *float64 `json:"estimate"`
+				Team       struct {
+					IssueEstimationType      string `json:"issueEstimationType"`
+					IssueEstimationExtended  bool   `json:"issueEstimationExtended"`
+					IssueEstimationAllowZero bool   `json:"issueEstimationAllowZero"`
+				} `json:"team"`
 			} `json:"nodes"`
 		} `json:"issues"`
 	}
@@ -92,7 +109,16 @@ func (c *Client) FetchIssue(ctx context.Context, identifier string) (*Issue, err
 		return nil, fmt.Errorf("issue %q not found", identifier)
 	}
 	n := resp.Issues.Nodes[0]
-	return &Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Estimate: n.Estimate}, nil
+	return &Issue{
+		ID:                  n.ID,
+		Identifier:          n.Identifier,
+		Title:               n.Title,
+		URL:                 n.URL,
+		Estimate:            n.Estimate,
+		EstimationType:      n.Team.IssueEstimationType,
+		EstimationExtended:  n.Team.IssueEstimationExtended,
+		EstimationAllowZero: n.Team.IssueEstimationAllowZero,
+	}, nil
 }
 
 // SetEstimate updates the estimate of the issue with the given UUID.

@@ -1,83 +1,136 @@
-// Package poker holds the pure planning-poker domain logic: vote scales and
+// Package poker holds the pure planning-poker domain logic: the vote scale and
 // consensus calculation. It has no dependency on Slack, Linear, or storage so
 // it can be tested in isolation.
+//
+// A scale is a list of points. Each point has a display Label (what voters see,
+// e.g. "5" or "M") and a numeric Value (what gets written to Linear). Scales are
+// derived per-team from Linear's estimation settings rather than hard-coded, so
+// a team using Fibonacci, exponential, linear, or T-shirt sizing all work.
 package poker
 
 import (
-	"math"
-	"sort"
+	"fmt"
 	"strconv"
 )
 
-// Scale is an ordered set of selectable vote labels. Non-numeric labels (such
-// as "?") are valid votes but are ignored when computing consensus.
-type Scale []string
-
-// Fibonacci is the classic planning-poker scale with an "unsure" option.
-var Fibonacci = Scale{"1", "2", "3", "5", "8", "13", "21", "?"}
-
-// Contains reports whether label is a selectable value on the scale.
-func (s Scale) Contains(label string) bool {
-	for _, v := range s {
-		if v == label {
-			return true
-		}
-	}
-	return false
+// Point is a single selectable estimate on a scale.
+type Point struct {
+	Label string  `json:"label"` // display label, e.g. "5" or "M"
+	Value float64 `json:"value"` // numeric estimate written to Linear
 }
 
-// numericValues returns the parseable numeric points on the scale, ascending.
-func (s Scale) numericValues() []float64 {
-	out := make([]float64, 0, len(s))
-	for _, v := range s {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			out = append(out, f)
+// Scale is an ordered set of estimate points.
+type Scale []Point
+
+// Linear estimation type identifiers, as returned by the GraphQL API's
+// Team.issueEstimationType field.
+const (
+	TypeExponential = "exponential"
+	TypeFibonacci   = "fibonacci"
+	TypeLinear      = "linear"
+	TypeTShirt      = "tShirt"
+	TypeNotUsed     = "notUsed"
+)
+
+// ScaleFor builds the estimate scale for a Linear team from its estimation
+// settings. T-shirt sizes map to the Fibonacci numbers (per Linear). An error
+// is returned when estimation is disabled for the team.
+func ScaleFor(estimationType string, extended, allowZero bool) (Scale, error) {
+	var labels []string // nil for numeric scales (label derived from value)
+	var values []float64
+
+	switch estimationType {
+	case TypeExponential:
+		values = []float64{1, 2, 4, 8, 16}
+		if extended {
+			values = append(values, 32, 64)
 		}
+	case TypeFibonacci:
+		values = []float64{1, 2, 3, 5, 8}
+		if extended {
+			values = append(values, 13, 21)
+		}
+	case TypeLinear:
+		values = []float64{1, 2, 3, 4, 5}
+		if extended {
+			values = append(values, 6, 7)
+		}
+	case TypeTShirt:
+		labels = []string{"XS", "S", "M", "L", "XL"}
+		values = []float64{1, 2, 3, 5, 8}
+		if extended {
+			labels = append(labels, "XXL", "XXXL")
+			values = append(values, 13, 21)
+		}
+	case "", TypeNotUsed:
+		return nil, fmt.Errorf("estimation is not enabled for this team")
+	default:
+		return nil, fmt.Errorf("unknown Linear estimation type %q", estimationType)
 	}
-	sort.Float64s(out)
+
+	scale := make(Scale, 0, len(values)+1)
+	if allowZero {
+		scale = append(scale, Point{Label: "0", Value: 0})
+	}
+	for i, v := range values {
+		label := strconv.FormatFloat(v, 'f', -1, 64)
+		if labels != nil {
+			label = labels[i]
+		}
+		scale = append(scale, Point{Label: label, Value: v})
+	}
+	return scale, nil
+}
+
+// Labels returns the display labels in scale order.
+func (s Scale) Labels() []string {
+	out := make([]string, len(s))
+	for i, p := range s {
+		out[i] = p.Label
+	}
 	return out
 }
 
-// Consensus computes the recommended estimate from the cast votes. It takes the
-// median of the numeric votes and snaps it to the nearest numeric point on the
-// scale. Non-numeric votes (e.g. "?") are excluded. ok is false when there are
-// no numeric votes to derive an estimate from.
-func (s Scale) Consensus(votes map[string]string) (label string, value float64, ok bool) {
-	nums := make([]float64, 0, len(votes))
-	for _, v := range votes {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			nums = append(nums, f)
+// Find returns the point with the given label.
+func (s Scale) Find(label string) (Point, bool) {
+	for _, p := range s {
+		if p.Label == label {
+			return p, true
 		}
 	}
-	if len(nums) == 0 {
-		return "", 0, false
-	}
-	sort.Float64s(nums)
-
-	var median float64
-	mid := len(nums) / 2
-	if len(nums)%2 == 1 {
-		median = nums[mid]
-	} else {
-		median = (nums[mid-1] + nums[mid]) / 2
-	}
-
-	return s.snap(median)
+	return Point{}, false
 }
 
-// snap returns the scale point nearest to target. Ties resolve to the lower
-// point. It returns ok=false only when the scale has no numeric points.
-func (s Scale) snap(target float64) (label string, value float64, ok bool) {
-	points := s.numericValues()
-	if len(points) == 0 {
-		return "", 0, false
-	}
-	best := points[0]
-	bestDist := math.Abs(points[0] - target)
-	for _, p := range points[1:] {
-		if d := math.Abs(p - target); d < bestDist {
-			best, bestDist = p, d
+// Contains reports whether label is a selectable point on the scale.
+func (s Scale) Contains(label string) bool {
+	_, ok := s.Find(label)
+	return ok
+}
+
+// Consensus computes the recommended estimate from the cast votes: the mode
+// (the most-voted point). This always resolves to a value someone actually
+// cast, unlike a median which can land on a value nobody voted for once
+// snapped to the nearest point on a non-linear scale. Ties (including "every
+// vote is different") break toward the higher point, so the tool overestimates
+// rather than under. ok is false when no votes map onto the scale.
+func (s Scale) Consensus(votes map[string]string) (Point, bool) {
+	counts := make(map[string]int, len(votes))
+	for _, label := range votes {
+		if _, ok := s.Find(label); ok {
+			counts[label]++
 		}
 	}
-	return strconv.FormatFloat(best, 'f', -1, 64), best, true
+	if len(counts) == 0 {
+		return Point{}, false
+	}
+
+	var best Point
+	bestCount := -1
+	for label, count := range counts {
+		p, _ := s.Find(label)
+		if count > bestCount || (count == bestCount && p.Value > best.Value) {
+			best, bestCount = p, count
+		}
+	}
+	return best, true
 }

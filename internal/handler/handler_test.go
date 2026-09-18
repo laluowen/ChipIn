@@ -3,26 +3,57 @@ package handler
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/laluowen/ChipIn/internal/linear"
+	"github.com/laluowen/ChipIn/internal/poker"
 	"github.com/laluowen/ChipIn/internal/store"
 	"github.com/slack-go/slack"
 )
 
+// fibScale is the extended Fibonacci scale used by seeded test sessions.
+func fibScale() poker.Scale {
+	s, err := poker.ScaleFor(poker.TypeFibonacci, true, false)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
 // --- fakes ---
 
 type fakeSlack struct {
-	postCh, postTS string
-	posts          int
-	updates        int
-	lastUpdateTS   string
-	nextTS         string
+	postCh, postTS    string
+	posts             int
+	updates           int
+	lastUpdateTS      string
+	lastUpdateChannel string
+	nextTS            string
+	opens             int
+	nextDMChannel     string // override for OpenConversation's returned channel ID
+	failUpdateFor     string // if set, the next UpdateMessage to this channelID fails once
+	permalinks        int
+	permalinkErr      error
+	nextPermalink     string
+	lastPostText      string
+	lastUpdateText    string
 }
 
-func (f *fakeSlack) PostMessage(channelID string, _ ...slack.MsgOption) (string, string, error) {
+// msgText extracts the rendered "text" param from Block Kit MsgOptions, so
+// tests can assert on message content without a live Slack API.
+func msgText(options ...slack.MsgOption) string {
+	_, values, err := slack.UnsafeApplyMsgOptions("tok", "C", "https://slack.test/", options...)
+	if err != nil {
+		return ""
+	}
+	return values.Get("text")
+}
+
+func (f *fakeSlack) PostMessage(channelID string, options ...slack.MsgOption) (string, string, error) {
 	f.posts++
 	f.postCh = channelID
+	f.lastPostText = msgText(options...)
 	ts := f.nextTS
 	if ts == "" {
 		ts = "1700000000.000100"
@@ -31,10 +62,38 @@ func (f *fakeSlack) PostMessage(channelID string, _ ...slack.MsgOption) (string,
 	return channelID, ts, nil
 }
 
-func (f *fakeSlack) UpdateMessage(channelID, timestamp string, _ ...slack.MsgOption) (string, string, string, error) {
+func (f *fakeSlack) UpdateMessage(channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
 	f.updates++
 	f.lastUpdateTS = timestamp
+	f.lastUpdateChannel = channelID
+	f.lastUpdateText = msgText(options...)
+	if f.failUpdateFor != "" && channelID == f.failUpdateFor {
+		f.failUpdateFor = "" // consume: fail once, then succeed on retry
+		return "", "", "", errors.New("simulated update failure")
+	}
 	return channelID, timestamp, "", nil
+}
+
+func (f *fakeSlack) OpenConversation(params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
+	f.opens++
+	id := f.nextDMChannel
+	if id == "" {
+		id = "D-" + params.Users[0]
+	}
+	ch := &slack.Channel{}
+	ch.ID = id
+	return ch, false, false, nil
+}
+
+func (f *fakeSlack) GetPermalink(params *slack.PermalinkParameters) (string, error) {
+	f.permalinks++
+	if f.permalinkErr != nil {
+		return "", f.permalinkErr
+	}
+	if f.nextPermalink != "" {
+		return f.nextPermalink, nil
+	}
+	return "https://workspace.slack.com/archives/" + params.Channel + "/p" + params.Ts, nil
 }
 
 type fakeLinear struct {
@@ -70,7 +129,11 @@ func newTestHandler(t *testing.T, l *fakeLinear) (*PokerHandler, *fakeSlack, sto
 // --- tests ---
 
 func TestSlashCommandCreatesSession(t *testing.T) {
-	fl := &fakeLinear{issue: &linear.Issue{ID: "uuid-1", Identifier: "ENG-1", Title: "Do the thing"}}
+	fl := &fakeLinear{issue: &linear.Issue{
+		ID: "uuid-1", Identifier: "ENG-1", Title: "Do the thing",
+		URL:            "https://linear.app/acme/issue/ENG-1/do-the-thing",
+		EstimationType: poker.TypeFibonacci, EstimationExtended: true,
+	}}
 	h, fs, repo := newTestHandler(t, fl)
 	fs.nextTS = "1700000000.000200"
 
@@ -91,6 +154,57 @@ func TestSlashCommandCreatesSession(t *testing.T) {
 	}
 	if sess.ChannelID != "C1" {
 		t.Errorf("ChannelID = %q", sess.ChannelID)
+	}
+	// The scale from the Linear team is persisted on the session.
+	if got := sess.Scale.Labels(); len(got) != 7 || got[len(got)-1] != "21" {
+		t.Errorf("scale = %v, want extended fibonacci", got)
+	}
+	// The issue's Linear URL and the vote message's Slack permalink are both
+	// captured so later renders/DMs can link back to their source.
+	if sess.IssueURL != "https://linear.app/acme/issue/ENG-1/do-the-thing" {
+		t.Errorf("IssueURL = %q", sess.IssueURL)
+	}
+	if fs.permalinks != 1 {
+		t.Errorf("expected one permalink lookup, got %d", fs.permalinks)
+	}
+	if sess.MessageLink != "https://workspace.slack.com/archives/C1/p1700000000.000200" {
+		t.Errorf("MessageLink = %q", sess.MessageLink)
+	}
+}
+
+func TestSlashCommandToleratesPermalinkFailure(t *testing.T) {
+	fl := &fakeLinear{issue: &linear.Issue{
+		ID: "uuid-1", Identifier: "ENG-1", Title: "x",
+		EstimationType: poker.TypeFibonacci,
+	}}
+	h, fs, repo := newTestHandler(t, fl)
+	fs.permalinkErr = errors.New("permalink lookup failed")
+
+	cmd := slack.SlashCommand{ChannelID: "C1", UserID: "U1", Text: "ENG-1"}
+	if err := h.HandleSlashCommand(context.Background(), cmd); err != nil {
+		t.Fatalf("HandleSlashCommand should tolerate a permalink failure: %v", err)
+	}
+	sess, err := repo.GetSession(context.Background(), "uuid-1")
+	if err != nil {
+		t.Fatalf("session not saved: %v", err)
+	}
+	if sess.MessageLink != "" {
+		t.Errorf("MessageLink = %q, want empty on permalink failure", sess.MessageLink)
+	}
+}
+
+func TestSlashCommandEstimationDisabled(t *testing.T) {
+	fl := &fakeLinear{issue: &linear.Issue{
+		ID: "uuid-1", Identifier: "ENG-1", Title: "x", EstimationType: poker.TypeNotUsed,
+	}}
+	h, _, repo := newTestHandler(t, fl)
+
+	cmd := slack.SlashCommand{ChannelID: "C1", UserID: "U1", Text: "ENG-1"}
+	if err := h.HandleSlashCommand(context.Background(), cmd); err != nil {
+		t.Fatalf("HandleSlashCommand: %v", err)
+	}
+	if _, err := repo.GetSession(context.Background(), "uuid-1"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("no session should be created when estimation is disabled")
 	}
 }
 
@@ -126,11 +240,99 @@ func TestVoteRecordsAndUpdates(t *testing.T) {
 		t.Errorf("vote = %q, want 5", sess.Votes["U1"])
 	}
 	if fs.updates != 1 || fs.lastUpdateTS != "ts1" {
-		t.Errorf("expected one update to ts1, got updates=%d ts=%q", fs.updates, fs.lastUpdateTS)
+		t.Errorf("expected one board update to ts1, got updates=%d ts=%q", fs.updates, fs.lastUpdateTS)
 	}
-	// The voter gets a private ephemeral confirmation of their pick.
+	// First vote: no notice on file yet, so the private confirmation opens a
+	// fresh DM and posts into it.
+	if fs.opens != 1 {
+		t.Errorf("expected one DM to be opened, got %d", fs.opens)
+	}
 	if fs.posts != 1 {
-		t.Errorf("expected 1 ephemeral confirmation post, got %d", fs.posts)
+		t.Errorf("expected 1 private confirmation post, got %d", fs.posts)
+	}
+	n, ok := sess.Notices["U1"]
+	if !ok || n.ChannelID == "" || n.MessageTS == "" {
+		t.Errorf("expected the DM notice reference to be persisted, got %+v", sess.Notices)
+	}
+}
+
+func TestPrivateNoticeLinksBackToVoteMessage(t *testing.T) {
+	fl := &fakeLinear{}
+	h, fs, repo := newTestHandler(t, fl)
+	seed(t, repo, &store.PokerSession{
+		IssueID: "uuid-1", Identifier: "ENG-1", Status: store.StatusVoting,
+		ChannelID: "C1", MessageTS: "ts1", Votes: map[string]string{},
+		MessageLink: "https://workspace.slack.com/archives/C1/p1700000000000100",
+	})
+
+	if err := h.HandleInteraction(context.Background(), interaction("U1", actionVotePrefix+"5", "uuid-1")); err != nil {
+		t.Fatalf("vote: %v", err)
+	}
+
+	want := "<https://workspace.slack.com/archives/C1/p1700000000000100|ENG-1>"
+	if !strings.Contains(fs.lastPostText, want) {
+		t.Errorf("private notice text = %q, want it to contain %q", fs.lastPostText, want)
+	}
+}
+
+func TestPrivateNoticeReusesExistingDM(t *testing.T) {
+	fl := &fakeLinear{}
+	h, fs, repo := newTestHandler(t, fl)
+	seed(t, repo, &store.PokerSession{
+		IssueID: "uuid-1", Status: store.StatusVoting, ChannelID: "C1", MessageTS: "ts1",
+		Votes:   map[string]string{},
+		Notices: map[string]store.Notice{"U1": {ChannelID: "D-1", MessageTS: "dm-ts-1"}},
+	})
+
+	if err := h.HandleInteraction(context.Background(), interaction("U1", actionVotePrefix+"5", "uuid-1")); err != nil {
+		t.Fatalf("vote: %v", err)
+	}
+
+	if fs.opens != 0 {
+		t.Errorf("expected no new DM opened when one is already on file, got %d", fs.opens)
+	}
+	if fs.posts != 0 {
+		t.Errorf("expected no new DM message posted, got %d", fs.posts)
+	}
+	// One update for the shared board, one for the reused DM notice.
+	if fs.updates != 2 {
+		t.Errorf("expected board + DM update, got %d", fs.updates)
+	}
+	if fs.lastUpdateChannel != "D-1" || fs.lastUpdateTS != "dm-ts-1" {
+		t.Errorf("expected the last update to target the existing DM message, got channel=%q ts=%q",
+			fs.lastUpdateChannel, fs.lastUpdateTS)
+	}
+
+	sess, _ := repo.GetSession(context.Background(), "uuid-1")
+	if sess.Notices["U1"].ChannelID != "D-1" || sess.Notices["U1"].MessageTS != "dm-ts-1" {
+		t.Errorf("notice reference should be unchanged on reuse, got %+v", sess.Notices["U1"])
+	}
+}
+
+func TestPrivateNoticeFallsBackWhenUpdateFails(t *testing.T) {
+	fl := &fakeLinear{}
+	h, fs, repo := newTestHandler(t, fl)
+	seed(t, repo, &store.PokerSession{
+		IssueID: "uuid-1", Status: store.StatusVoting, ChannelID: "C1", MessageTS: "ts1",
+		Votes:   map[string]string{},
+		Notices: map[string]store.Notice{"U1": {ChannelID: "D-stale", MessageTS: "stale-ts"}},
+	})
+	// Simulate the previously-remembered DM message no longer being updatable.
+	fs.failUpdateFor = "D-stale"
+
+	if err := h.HandleInteraction(context.Background(), interaction("U1", actionVotePrefix+"5", "uuid-1")); err != nil {
+		t.Fatalf("vote: %v", err)
+	}
+
+	if fs.opens != 1 {
+		t.Errorf("expected fallback to open a fresh DM, got %d opens", fs.opens)
+	}
+	if fs.posts != 1 {
+		t.Errorf("expected fallback to post a fresh DM message, got %d posts", fs.posts)
+	}
+	sess, _ := repo.GetSession(context.Background(), "uuid-1")
+	if sess.Notices["U1"].ChannelID == "D-stale" {
+		t.Errorf("stale notice reference should have been replaced, got %+v", sess.Notices["U1"])
 	}
 }
 
@@ -252,7 +454,7 @@ func TestSetEstimateWritesLinearAndDeletes(t *testing.T) {
 	h, fs, repo := newTestHandler(t, fl)
 	seed(t, repo, &store.PokerSession{
 		IssueID: "uuid-1", Status: store.StatusRevealed, ChannelID: "C1", MessageTS: "ts1",
-		Votes: map[string]string{"U1": "5", "U2": "5", "U3": "8"}, // median 5
+		Votes: map[string]string{"U1": "5", "U2": "5", "U3": "8"}, // mode 5
 	})
 
 	if err := h.HandleInteraction(context.Background(), interaction("U1", actionSetEstimate, "uuid-1")); err != nil {
@@ -269,19 +471,37 @@ func TestSetEstimateWritesLinearAndDeletes(t *testing.T) {
 	}
 }
 
-func TestSetEstimateWithNoNumericVotesKeepsSession(t *testing.T) {
+func TestSetEstimateHonorsDropdownOverride(t *testing.T) {
 	fl := &fakeLinear{}
 	h, _, repo := newTestHandler(t, fl)
 	seed(t, repo, &store.PokerSession{
 		IssueID: "uuid-1", Status: store.StatusRevealed, ChannelID: "C1", MessageTS: "ts1",
-		Votes: map[string]string{"U1": "?"},
+		Votes: map[string]string{"U1": "5", "U2": "5"}, // consensus would be 5
+	})
+
+	// The team discussed and picked 13 in the dropdown before setting.
+	cb := interactionWithEstimate("U1", actionSetEstimate, "uuid-1", "13")
+	if err := h.HandleInteraction(context.Background(), cb); err != nil {
+		t.Fatalf("set estimate: %v", err)
+	}
+	if !fl.setCalled || fl.setEstimate != 13 {
+		t.Errorf("expected override estimate 13, got %+v", fl)
+	}
+}
+
+func TestSetEstimateWithNoVotesKeepsSession(t *testing.T) {
+	fl := &fakeLinear{}
+	h, _, repo := newTestHandler(t, fl)
+	seed(t, repo, &store.PokerSession{
+		IssueID: "uuid-1", Status: store.StatusRevealed, ChannelID: "C1", MessageTS: "ts1",
+		Votes: map[string]string{},
 	})
 
 	if err := h.HandleInteraction(context.Background(), interaction("U1", actionSetEstimate, "uuid-1")); err != nil {
 		t.Fatalf("set estimate: %v", err)
 	}
 	if fl.setCalled {
-		t.Error("linear should not be called without numeric votes")
+		t.Error("linear should not be called with no votes and no selection")
 	}
 	if _, err := repo.GetSession(context.Background(), "uuid-1"); err != nil {
 		t.Error("session should be kept when nothing to estimate")
@@ -304,6 +524,9 @@ func TestStaleInteractionIgnored(t *testing.T) {
 
 func seed(t *testing.T, repo store.SessionRepository, sess *store.PokerSession) {
 	t.Helper()
+	if sess.Scale == nil {
+		sess.Scale = fibScale()
+	}
 	if err := repo.SaveSession(context.Background(), sess); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
@@ -319,4 +542,19 @@ func interaction(userID, actionID, value string) slack.InteractionCallback {
 			},
 		},
 	}
+}
+
+// interactionWithEstimate is like interaction but also carries the estimate
+// dropdown's current selection in the block-action state, as Slack includes it
+// when a button in the same message is pressed.
+func interactionWithEstimate(userID, actionID, value, selectedLabel string) slack.InteractionCallback {
+	cb := interaction(userID, actionID, value)
+	cb.BlockActionState = &slack.BlockActionStates{
+		Values: map[string]map[string]slack.BlockAction{
+			blockEstimate: {
+				actionEstimateSelect: {SelectedOption: slack.OptionBlockObject{Value: selectedLabel}},
+			},
+		},
+	}
+	return cb
 }

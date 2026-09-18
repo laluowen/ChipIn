@@ -6,6 +6,8 @@ package store
 import (
 	"context"
 	"errors"
+
+	"github.com/laluowen/ChipIn/internal/poker"
 )
 
 // ErrNotFound is returned by GetSession when no session exists for the issue.
@@ -19,13 +21,24 @@ const (
 
 // PokerSession is the persisted state of an in-progress estimation round.
 type PokerSession struct {
-	IssueID    string            // Linear issue UUID (primary key)
-	Identifier string            // human identifier, e.g. "ENG-123"
-	Title      string            // issue title, for display
-	Status     string            // StatusVoting | StatusRevealed
-	ChannelID  string            // Slack channel the round lives in
-	MessageTS  string            // Slack message timestamp, for chat.update
-	Votes      map[string]string // Slack userID -> vote label
+	IssueID     string            // Linear issue UUID (primary key)
+	Identifier  string            // human identifier, e.g. "ENG-123"
+	Title       string            // issue title, for display
+	IssueURL    string            // Linear app URL for the issue, for linking back
+	Status      string            // StatusVoting | StatusRevealed
+	ChannelID   string            // Slack channel the round lives in
+	MessageTS   string            // Slack message timestamp, for chat.update
+	MessageLink string            // permalink to the vote message, for DM context
+	Votes       map[string]string // Slack userID -> vote label
+	Scale       poker.Scale       // estimate points derived from the Linear team
+	Notices     map[string]Notice // Slack userID -> their private DM notice message
+}
+
+// Notice locates a previously-sent private DM message so it can be updated in
+// place (via chat.update) instead of sending a new one on every vote.
+type Notice struct {
+	ChannelID string `json:"channel_id"` // the user's DM channel with the bot
+	MessageTS string `json:"message_ts"`
 }
 
 // SessionRepository persists poker sessions keyed by Linear issue ID.
