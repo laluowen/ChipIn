@@ -40,9 +40,9 @@ func TestSaveAndGetRoundTrip(t *testing.T) {
 		ChannelID:   "C123",
 		MessageTS:   "1700000000.000100",
 		MessageLink: "https://workspace.slack.com/archives/C123/p1700000000000100",
+		RequestedBy: "U1",
 		Votes:       map[string]string{"u1": "5", "u2": "?"},
 		Scale:       poker.Scale{{Label: "1", Value: 1}, {Label: "M", Value: 3}},
-		Notices:     map[string]Notice{"u1": {ChannelID: "D1", MessageTS: "dm-ts-1"}},
 	}
 	if err := s.SaveSession(ctx, want); err != nil {
 		t.Fatalf("SaveSession: %v", err)
@@ -55,7 +55,7 @@ func TestSaveAndGetRoundTrip(t *testing.T) {
 	if got.Identifier != want.Identifier || got.Title != want.Title ||
 		got.Status != want.Status || got.ChannelID != want.ChannelID ||
 		got.MessageTS != want.MessageTS || got.IssueURL != want.IssueURL ||
-		got.MessageLink != want.MessageLink {
+		got.MessageLink != want.MessageLink || got.RequestedBy != want.RequestedBy {
 		t.Errorf("scalar fields mismatch:\n got %+v\nwant %+v", got, want)
 	}
 	if len(got.Votes) != 2 || got.Votes["u1"] != "5" || got.Votes["u2"] != "?" {
@@ -63,9 +63,6 @@ func TestSaveAndGetRoundTrip(t *testing.T) {
 	}
 	if len(got.Scale) != 2 || got.Scale[1].Label != "M" || got.Scale[1].Value != 3 {
 		t.Errorf("scale = %v, want round-tripped points", got.Scale)
-	}
-	if n := got.Notices["u1"]; n.ChannelID != "D1" || n.MessageTS != "dm-ts-1" {
-		t.Errorf("notices = %v, want round-tripped notice", got.Notices)
 	}
 }
 
@@ -115,10 +112,10 @@ func TestDelete(t *testing.T) {
 // compile-time check that *SQLite satisfies the interface.
 var _ SessionRepository = (*SQLite)(nil)
 
-// TestMigrateAddsScaleColumn simulates opening a database created before the
-// "scale" and "notices" columns existed (CREATE TABLE IF NOT EXISTS is a
-// no-op on an existing table, so this needs its own migration path; see the
-// "no such column: scale" bug this test guards against).
+// TestMigrateAddsScaleColumn simulates opening a database created before any
+// of the later columns existed (CREATE TABLE IF NOT EXISTS is a no-op on an
+// existing table, so this needs its own migration path; see the "no such
+// column: scale" bug this test guards against).
 func TestMigrateAddsScaleColumn(t *testing.T) {
 	path := t.TempDir() + "/legacy.db"
 
@@ -159,9 +156,8 @@ func TestMigrateAddsScaleColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSession on legacy row: %v", err)
 	}
-	if got.Votes["u1"] != "5" || len(got.Scale) != 0 || len(got.Notices) != 0 ||
-		got.IssueURL != "" || got.MessageLink != "" {
-		t.Errorf("legacy row = %+v, want votes u1=5 and empty scale/notices/urls", got)
+	if got.Votes["u1"] != "5" || len(got.Scale) != 0 || got.IssueURL != "" || got.MessageLink != "" {
+		t.Errorf("legacy row = %+v, want votes u1=5 and empty scale/urls", got)
 	}
 
 	// New sessions with a scale should also save and load fine post-migration.
@@ -178,5 +174,83 @@ func TestMigrateAddsScaleColumn(t *testing.T) {
 	}
 	if len(got2.Scale) != 1 || got2.Scale[0].Label != "1" {
 		t.Errorf("scale after migration = %v", got2.Scale)
+	}
+}
+
+// TestMigrateDropsObsoleteNoticesColumn simulates opening a database created
+// by an abandoned design (DM-based private notices, keyed per user) that was
+// reverted in favour of plain ephemeral messages. The "notices" column from
+// that era should be dropped on open, and unrelated data must survive.
+func TestMigrateDropsObsoleteNoticesColumn(t *testing.T) {
+	path := t.TempDir() + "/dm-era.db"
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE sessions (
+		issue_id     TEXT PRIMARY KEY,
+		identifier   TEXT NOT NULL,
+		title        TEXT NOT NULL,
+		status       TEXT NOT NULL,
+		channel_id   TEXT NOT NULL,
+		message_ts   TEXT NOT NULL,
+		votes        TEXT NOT NULL,
+		scale        TEXT NOT NULL DEFAULT '[]',
+		notices      TEXT NOT NULL DEFAULT '{}',
+		issue_url    TEXT NOT NULL DEFAULT '',
+		message_link TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatalf("create dm-era table: %v", err)
+	}
+	if _, err := raw.Exec(
+		`INSERT INTO sessions
+			(issue_id, identifier, title, status, channel_id, message_ts, votes, scale, notices, issue_url, message_link)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"uuid-1", "ENG-1", "Old issue", StatusVoting, "C1", "ts1", `{"u1":"5"}`, `[]`,
+		`{"u1":{"channel_id":"D1","message_ts":"dm-ts-1"}}`,
+		"https://linear.app/acme/issue/ENG-1", "https://workspace.slack.com/archives/C1/pts1"); err != nil {
+		t.Fatalf("insert dm-era row: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	s, err := NewSQLite(path)
+	if err != nil {
+		t.Fatalf("NewSQLite on dm-era db: %v", err)
+	}
+	defer s.Close()
+
+	rows, err := s.db.Query(`PRAGMA table_info(sessions)`)
+	if err != nil {
+		t.Fatalf("table_info: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			t.Fatalf("scan table_info: %v", err)
+		}
+		if name == "notices" {
+			t.Error("obsolete 'notices' column should have been dropped")
+		}
+	}
+
+	// Unrelated data on the row must survive the column drop.
+	got, err := s.GetSession(context.Background(), "uuid-1")
+	if err != nil {
+		t.Fatalf("GetSession after dropping notices: %v", err)
+	}
+	if got.Votes["u1"] != "5" || got.IssueURL != "https://linear.app/acme/issue/ENG-1" ||
+		got.MessageLink != "https://workspace.slack.com/archives/C1/pts1" {
+		t.Errorf("row after migration = %+v", got)
+	}
+	// requested_by is new; it should be backfilled empty rather than error.
+	if got.RequestedBy != "" {
+		t.Errorf("RequestedBy = %q, want empty backfill", got.RequestedBy)
 	}
 }

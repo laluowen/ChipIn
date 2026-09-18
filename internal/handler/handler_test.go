@@ -24,20 +24,16 @@ func fibScale() poker.Scale {
 // --- fakes ---
 
 type fakeSlack struct {
-	postCh, postTS    string
-	posts             int
-	updates           int
-	lastUpdateTS      string
-	lastUpdateChannel string
-	nextTS            string
-	opens             int
-	nextDMChannel     string // override for OpenConversation's returned channel ID
-	failUpdateFor     string // if set, the next UpdateMessage to this channelID fails once
-	permalinks        int
-	permalinkErr      error
-	nextPermalink     string
-	lastPostText      string
-	lastUpdateText    string
+	postCh, postTS string
+	posts          int
+	updates        int
+	lastUpdateTS   string
+	nextTS         string
+	lastPostText   string
+	lastUpdateText string
+	permalinks     int
+	permalinkErr   error
+	nextPermalink  string
 }
 
 // msgText extracts the rendered "text" param from Block Kit MsgOptions, so
@@ -65,24 +61,8 @@ func (f *fakeSlack) PostMessage(channelID string, options ...slack.MsgOption) (s
 func (f *fakeSlack) UpdateMessage(channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
 	f.updates++
 	f.lastUpdateTS = timestamp
-	f.lastUpdateChannel = channelID
 	f.lastUpdateText = msgText(options...)
-	if f.failUpdateFor != "" && channelID == f.failUpdateFor {
-		f.failUpdateFor = "" // consume: fail once, then succeed on retry
-		return "", "", "", errors.New("simulated update failure")
-	}
 	return channelID, timestamp, "", nil
-}
-
-func (f *fakeSlack) OpenConversation(params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
-	f.opens++
-	id := f.nextDMChannel
-	if id == "" {
-		id = "D-" + params.Users[0]
-	}
-	ch := &slack.Channel{}
-	ch.ID = id
-	return ch, false, false, nil
 }
 
 func (f *fakeSlack) GetPermalink(params *slack.PermalinkParameters) (string, error) {
@@ -160,7 +140,7 @@ func TestSlashCommandCreatesSession(t *testing.T) {
 		t.Errorf("scale = %v, want extended fibonacci", got)
 	}
 	// The issue's Linear URL and the vote message's Slack permalink are both
-	// captured so later renders/DMs can link back to their source.
+	// captured so later renders/notices can link back to their source.
 	if sess.IssueURL != "https://linear.app/acme/issue/ENG-1/do-the-thing" {
 		t.Errorf("IssueURL = %q", sess.IssueURL)
 	}
@@ -169,6 +149,10 @@ func TestSlashCommandCreatesSession(t *testing.T) {
 	}
 	if sess.MessageLink != "https://workspace.slack.com/archives/C1/p1700000000.000200" {
 		t.Errorf("MessageLink = %q", sess.MessageLink)
+	}
+	// The requester is captured for attribution in the message header.
+	if sess.RequestedBy != "U1" {
+		t.Errorf("RequestedBy = %q, want U1", sess.RequestedBy)
 	}
 }
 
@@ -242,17 +226,9 @@ func TestVoteRecordsAndUpdates(t *testing.T) {
 	if fs.updates != 1 || fs.lastUpdateTS != "ts1" {
 		t.Errorf("expected one board update to ts1, got updates=%d ts=%q", fs.updates, fs.lastUpdateTS)
 	}
-	// First vote: no notice on file yet, so the private confirmation opens a
-	// fresh DM and posts into it.
-	if fs.opens != 1 {
-		t.Errorf("expected one DM to be opened, got %d", fs.opens)
-	}
+	// The voter gets a private ephemeral confirmation of their pick.
 	if fs.posts != 1 {
 		t.Errorf("expected 1 private confirmation post, got %d", fs.posts)
-	}
-	n, ok := sess.Notices["U1"]
-	if !ok || n.ChannelID == "" || n.MessageTS == "" {
-		t.Errorf("expected the DM notice reference to be persisted, got %+v", sess.Notices)
 	}
 }
 
@@ -275,64 +251,24 @@ func TestPrivateNoticeLinksBackToVoteMessage(t *testing.T) {
 	}
 }
 
-func TestPrivateNoticeReusesExistingDM(t *testing.T) {
+func TestPrivateNoticeFallsBackToPlainIdentifierWithoutLink(t *testing.T) {
 	fl := &fakeLinear{}
 	h, fs, repo := newTestHandler(t, fl)
 	seed(t, repo, &store.PokerSession{
-		IssueID: "uuid-1", Status: store.StatusVoting, ChannelID: "C1", MessageTS: "ts1",
-		Votes:   map[string]string{},
-		Notices: map[string]store.Notice{"U1": {ChannelID: "D-1", MessageTS: "dm-ts-1"}},
+		IssueID: "uuid-1", Identifier: "ENG-1", Status: store.StatusVoting,
+		ChannelID: "C1", MessageTS: "ts1", Votes: map[string]string{},
+		// No MessageLink set.
 	})
 
 	if err := h.HandleInteraction(context.Background(), interaction("U1", actionVotePrefix+"5", "uuid-1")); err != nil {
 		t.Fatalf("vote: %v", err)
 	}
 
-	if fs.opens != 0 {
-		t.Errorf("expected no new DM opened when one is already on file, got %d", fs.opens)
+	if !strings.Contains(fs.lastPostText, "*ENG-1*:") {
+		t.Errorf("private notice text = %q, want a plain issue-key prefix", fs.lastPostText)
 	}
-	if fs.posts != 0 {
-		t.Errorf("expected no new DM message posted, got %d", fs.posts)
-	}
-	// One update for the shared board, one for the reused DM notice.
-	if fs.updates != 2 {
-		t.Errorf("expected board + DM update, got %d", fs.updates)
-	}
-	if fs.lastUpdateChannel != "D-1" || fs.lastUpdateTS != "dm-ts-1" {
-		t.Errorf("expected the last update to target the existing DM message, got channel=%q ts=%q",
-			fs.lastUpdateChannel, fs.lastUpdateTS)
-	}
-
-	sess, _ := repo.GetSession(context.Background(), "uuid-1")
-	if sess.Notices["U1"].ChannelID != "D-1" || sess.Notices["U1"].MessageTS != "dm-ts-1" {
-		t.Errorf("notice reference should be unchanged on reuse, got %+v", sess.Notices["U1"])
-	}
-}
-
-func TestPrivateNoticeFallsBackWhenUpdateFails(t *testing.T) {
-	fl := &fakeLinear{}
-	h, fs, repo := newTestHandler(t, fl)
-	seed(t, repo, &store.PokerSession{
-		IssueID: "uuid-1", Status: store.StatusVoting, ChannelID: "C1", MessageTS: "ts1",
-		Votes:   map[string]string{},
-		Notices: map[string]store.Notice{"U1": {ChannelID: "D-stale", MessageTS: "stale-ts"}},
-	})
-	// Simulate the previously-remembered DM message no longer being updatable.
-	fs.failUpdateFor = "D-stale"
-
-	if err := h.HandleInteraction(context.Background(), interaction("U1", actionVotePrefix+"5", "uuid-1")); err != nil {
-		t.Fatalf("vote: %v", err)
-	}
-
-	if fs.opens != 1 {
-		t.Errorf("expected fallback to open a fresh DM, got %d opens", fs.opens)
-	}
-	if fs.posts != 1 {
-		t.Errorf("expected fallback to post a fresh DM message, got %d posts", fs.posts)
-	}
-	sess, _ := repo.GetSession(context.Background(), "uuid-1")
-	if sess.Notices["U1"].ChannelID == "D-stale" {
-		t.Errorf("stale notice reference should have been replaced, got %+v", sess.Notices["U1"])
+	if strings.Contains(fs.lastPostText, "<|") {
+		t.Errorf("private notice text = %q, should not render an empty-URL hyperlink", fs.lastPostText)
 	}
 }
 

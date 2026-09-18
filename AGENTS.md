@@ -57,29 +57,33 @@ see `PLAN.md`.
   (read from `InteractionCallback.BlockActionState`), falling back to the consensus.
 - **Reveal is a toggle**, not a teardown. `voting ⇄ revealed`. "Set estimate" writes to
   Linear and deletes the session; "Cancel" deletes without writing.
-- **Private notices are a real DM message, updated in place.** Per-user confirmations
-  (vote/retract) are NOT `chat.postEphemeral` (can't be updated — every vote would
-  stack a new one) and NOT a `response_url` ephemeral either (confirmed in practice:
-  posting to `response_url` does not replace a prior response from an earlier
-  interaction payload — it just stacks too, since each interaction gets its own
-  `response_url`). Instead: `sendPrivateNotice` opens (or resumes) a DM with the user
-  via `conversations.open` once, remembers `{ChannelID, MessageTS}` on the session
-  (`store.Notice`, keyed by user), and calls `chat.update` on that same message for
-  every later notice. If the update fails (e.g. stale/deleted message) it falls back
-  to opening a fresh DM and re-persists the new reference.
-- **Context links both ways.** The vote message header hyperlinks the issue
-  identifier to Linear (`Issue.url`, persisted as `PokerSession.IssueURL`). Private
-  DM notices link back to the vote message via its Slack permalink
-  (`chat.getPermalink`, fetched once at round start and persisted as
-  `PokerSession.MessageLink`); permalink lookup is best-effort and never blocks
-  starting a round. Threading the issue description/attributes under the vote
-  message is planned but not built — see `PLAN.md` §6.
+- **Private notices are plain `chat.postEphemeral`, one per vote.** A DM-based
+  "one message, updated in place" design was tried and reverted (too many moving
+  parts: `conversations.open`, a persisted per-user `{ChannelID, MessageTS}`
+  reference, stale-message fallback logic — not worth it). Ephemeral messages
+  genuinely cannot be updated or deduped by Slack, so each vote/retract does post
+  a new one; that's accepted as the simpler tradeoff.
+- **Context links both ways, compactly.** The vote message header hyperlinks the
+  issue identifier to Linear (`Issue.url`, persisted as `PokerSession.IssueURL`)
+  and attributes the round to whoever ran `/chipin` (`Started by <@RequestedBy>`).
+  Private notices are prefixed with the issue key, hyperlinked to the vote
+  message's Slack permalink (`chat.getPermalink`, fetched once at round start,
+  persisted as `PokerSession.MessageLink`) when available. **Caveat:**
+  `chat.postEphemeral` documents no `unfurl_links`/`unfurl_media` params at all
+  (unlike `chat.postMessage`), and Slack's classic-unfurl docs scope automatic
+  unfurling to `chat.postMessage`/incoming webhooks only — strong circumstantial
+  evidence ephemeral messages aren't part of that pipeline, but not a guarantee
+  in writing. If a live ephemeral notice ever shows an unfurled preview of the
+  linked message, strip the hyperlink in `privateNotice` (one-line change) and
+  fall back to a plain `*<identifier>*:` prefix. Threading the issue
+  description/attributes under the vote message is a separate planned feature,
+  not built — see `PLAN.md` §6.
 
 ## Slack app scopes (Socket Mode)
 
-Bot token needs: `commands`, `chat:write`, `im:write` (the last is required to open a
-DM for private vote confirmations). App-level token needs `connections:write`.
+Bot token needs: `commands`, `chat:write`. App-level token needs `connections:write`.
 Enable Socket Mode, add a `/chipin` slash command, and enable Interactivity.
+(`chat.getPermalink`, used for notice context, requires no scopes at all.)
 
 ## Env vars (local)
 

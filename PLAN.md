@@ -35,22 +35,17 @@ package store
 import "context"
 
 type PokerSession struct {
-    IssueID    string            // Linear issue UUID (primary key)
-    Identifier string            // human identifier, e.g. "ENG-123"
-    Title      string            // issue title, for display
-    Status     string            // "voting" | "revealed"
-    ChannelID  string            // Slack channel
-    MessageTS  string            // Slack message ts, for chat.update
-    Votes      map[string]string // Slack userID -> vote label
-    Scale      poker.Scale       // estimate points, derived from the Linear team
-    Notices    map[string]Notice // Slack userID -> their private DM notice message
-}
-
-// Notice locates a previously-sent private DM message so it can be updated in
-// place instead of sending a new one on every vote.
-type Notice struct {
-    ChannelID string
-    MessageTS string
+    IssueID     string            // Linear issue UUID (primary key)
+    Identifier  string            // human identifier, e.g. "ENG-123"
+    Title       string            // issue title, for display
+    IssueURL    string            // Linear app URL for the issue, for linking back
+    Status      string            // "voting" | "revealed"
+    ChannelID   string            // Slack channel
+    MessageTS   string            // Slack message ts, for chat.update
+    MessageLink string            // permalink to the vote message, for private-notice context
+    RequestedBy string            // Slack userID of whoever ran /chipin, for attribution
+    Votes       map[string]string // Slack userID -> vote label
+    Scale       poker.Scale       // estimate points, derived from the Linear team
 }
 
 type SessionRepository interface {
@@ -70,11 +65,17 @@ type SessionRepository interface {
   §3). A `poker.Point` is `{Label, Value}`: `Label` is what voters see, `Value` is the
   number written to Linear. The scale is persisted (SQLite `scale` column) so buttons,
   vote validation, and consensus all use the same points.
-- Added `Notices`, keyed by Slack user ID, so private vote confirmations can be
-  updated in place (`chat.update`) rather than reposted every vote. Neither
-  `chat.postEphemeral` nor an interaction's `response_url` can be updated/deduped
-  across separate interaction payloads in practice — a real DM message is the only
-  mechanism that supports it. Persisted as the `notices` SQLite column.
+- Added `IssueURL`, `MessageLink`, and `RequestedBy` for context/attribution — see
+  §6.
+- **A DM-based private-notice design (`Notices map[string]Notice`, keyed per user)
+  was tried and reverted.** It let private vote confirmations be updated in place
+  via `chat.update` instead of reposted every vote, but needed `conversations.open`,
+  a persisted per-user `{ChannelID, MessageTS}` reference, and stale-reference
+  fallback logic — too many moving parts for the win. Reverted to plain
+  `chat.postEphemeral` (one new message per vote; Slack has no way to update or
+  dedupe these). The `notices` SQLite column from that design is dropped via
+  migration on databases that already have it (`DROP COLUMN`, supported since
+  SQLite 3.35).
 - Added `Identifier`, `Title`, and `MessageTS`. `MessageTS` is required to
   `chat.update` the existing message; `Identifier`/`Title` are for display.
 - Added `Close()` so `main` can release the SQLite handle cleanly.
@@ -119,10 +120,11 @@ behind interfaces so the core stays unit-testable without live services.
       T-shirt, ± extended, ± zero). If estimation is disabled for the team, reply
       with an ephemeral error and stop.
 
-    - Post a Slack Block Kit message with one button per scale point (its header
-      hyperlinks the issue identifier to Linear via `Issue.url`), then fetch the
-      message's Slack permalink (`chat.getPermalink`) and create a `PokerSession`
-      (status `voting`, carrying the scale, `IssueURL`, and `MessageLink`).
+    - Post a Slack Block Kit message with one button per scale point. Its header
+      hyperlinks the issue identifier to Linear via `Issue.url`, and attributes the
+      round to the requester (`Started by <@user>`). Fetch the message's Slack
+      permalink (`chat.getPermalink`) and create a `PokerSession` (status
+      `voting`, carrying the scale, `IssueURL`, `MessageLink`, and `RequestedBy`).
 2. **Cast Votes (Async)**
 
     - Slack interaction routes to `HandleInteraction`. The issue UUID rides in the
@@ -130,10 +132,11 @@ behind interfaces so the core stays unit-testable without live services.
 
     - App loads the `PokerSession`, updates the `Votes` map, saves it, and fires
       `chat.update` to refresh the UI (individual votes stay hidden while voting).
-      The voter gets a private confirmation via a DM the bot opens with them once
-      and then updates in place on every later vote/retract (see §2.1 `Notices`).
-      The DM links back to the vote message (`<MessageLink|Identifier>`) so the
-      round's context is never more than a click away. Voters can change or
+      The voter gets a private confirmation via `chat.postEphemeral` — a fresh
+      ephemeral message per vote/retract (Slack cannot update or dedupe these; see
+      §2.1). It's prefixed with the issue key, hyperlinked to the vote message
+      (`<MessageLink|Identifier>`) when a permalink is on file, so the round's
+      context is a click away without extra vertical space. Voters can change or
       **retract** their own vote at any time.
 3. **Reveal ⇄ Continue (toggle)**
 
@@ -209,12 +212,22 @@ actual vote".
 **Implemented:**
 
 - The vote message header hyperlinks the issue identifier to the issue's Linear
-  URL (`Issue.url` from the GraphQL API, persisted as `PokerSession.IssueURL`).
-- Private DM notices (vote confirmations, retractions) link back to the vote
-  message itself via its Slack permalink (`chat.getPermalink`, fetched once when
-  the round starts and persisted as `PokerSession.MessageLink`), rendered as
-  `<permalink|IDENTIFIER>`. Permalink lookup is best-effort: if it fails, notices
-  just fall back to plain text rather than blocking the round from starting.
+  URL (`Issue.url` from the GraphQL API, persisted as `PokerSession.IssueURL`)
+  and attributes the round to whoever ran `/chipin` (`Started by <@RequestedBy>`,
+  persisted as `PokerSession.RequestedBy`).
+- Private vote/retract confirmations (`chat.postEphemeral`) are prefixed with the
+  issue key, hyperlinked to the vote message via its Slack permalink
+  (`chat.getPermalink`, fetched once when the round starts and persisted as
+  `PokerSession.MessageLink`) when available — `<permalink|IDENTIFIER>: <body>`.
+  Permalink lookup is best-effort: if it fails, notices fall back to a plain
+  `*<identifier>*:` prefix rather than blocking the round from starting.
+  **Caveat:** `chat.postEphemeral` documents no `unfurl_links`/`unfurl_media`
+  params at all (unlike `chat.postMessage`), and Slack's classic-unfurl docs
+  scope automatic unfurling to `chat.postMessage`/incoming webhooks only —
+  strong circumstantial evidence (not a written guarantee) that ephemeral
+  messages aren't part of that pipeline, i.e. this link shouldn't trigger an
+  unfurled preview. If that assumption is ever wrong in practice, drop the
+  hyperlink in `privateNotice` (one-line change).
 
 **Planned: issue description in a thread.** Post the Linear issue's description
 (and other useful attributes — assignee, priority, labels, current estimate if
@@ -236,7 +249,7 @@ this up:
   `HandleSlashCommand`.
 - Not persisted on `PokerSession` — it's a one-time post at round start, nothing
   to update later, so no new session field is needed (unlike `IssueURL` and
-  `MessageLink`, which are read again on every re-render/DM).
+  `MessageLink`, which are read again on every re-render/notice).
 
 ## 7. Build, Release & CI (planned)
 

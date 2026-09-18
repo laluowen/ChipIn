@@ -28,17 +28,10 @@ type PokerSession struct {
 	Status      string            // StatusVoting | StatusRevealed
 	ChannelID   string            // Slack channel the round lives in
 	MessageTS   string            // Slack message timestamp, for chat.update
-	MessageLink string            // permalink to the vote message, for DM context
+	MessageLink string            // permalink to the vote message, for private-notice context
+	RequestedBy string            // Slack userID of whoever ran /chipin, for attribution
 	Votes       map[string]string // Slack userID -> vote label
 	Scale       poker.Scale       // estimate points derived from the Linear team
-	Notices     map[string]Notice // Slack userID -> their private DM notice message
-}
-
-// Notice locates a previously-sent private DM message so it can be updated in
-// place (via chat.update) instead of sending a new one on every vote.
-type Notice struct {
-	ChannelID string `json:"channel_id"` // the user's DM channel with the bot
-	MessageTS string `json:"message_ts"`
 }
 
 // SessionRepository persists poker sessions keyed by Linear issue ID.
