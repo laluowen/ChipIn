@@ -134,6 +134,54 @@ func TestVoteRecordsAndUpdates(t *testing.T) {
 	}
 }
 
+func TestRetractRemovesOwnVote(t *testing.T) {
+	fl := &fakeLinear{}
+	h, fs, repo := newTestHandler(t, fl)
+	seed(t, repo, &store.PokerSession{
+		IssueID: "uuid-1", Status: store.StatusVoting, ChannelID: "C1", MessageTS: "ts1",
+		Votes: map[string]string{"U1": "5", "U2": "8"},
+	})
+
+	if err := h.HandleInteraction(context.Background(), interaction("U1", actionRetract, "uuid-1")); err != nil {
+		t.Fatalf("retract: %v", err)
+	}
+
+	sess, _ := repo.GetSession(context.Background(), "uuid-1")
+	if _, still := sess.Votes["U1"]; still {
+		t.Errorf("U1 vote should be removed, got %v", sess.Votes)
+	}
+	if sess.Votes["U2"] != "8" {
+		t.Errorf("U2 vote should be untouched, got %v", sess.Votes)
+	}
+	if fs.updates != 1 {
+		t.Errorf("expected the shared board to refresh once, got %d", fs.updates)
+	}
+	if fs.posts != 1 {
+		t.Errorf("expected one private retract confirmation, got %d", fs.posts)
+	}
+}
+
+func TestRetractWithNoVoteIsNoOp(t *testing.T) {
+	fl := &fakeLinear{}
+	h, fs, repo := newTestHandler(t, fl)
+	seed(t, repo, &store.PokerSession{
+		IssueID: "uuid-1", Status: store.StatusVoting, ChannelID: "C1", MessageTS: "ts1",
+		Votes: map[string]string{"U2": "8"},
+	})
+
+	if err := h.HandleInteraction(context.Background(), interaction("U1", actionRetract, "uuid-1")); err != nil {
+		t.Fatalf("retract: %v", err)
+	}
+	// The board is not refreshed when there was nothing to retract, but the
+	// user still gets a private note.
+	if fs.updates != 0 {
+		t.Errorf("expected no board refresh, got %d", fs.updates)
+	}
+	if fs.posts != 1 {
+		t.Errorf("expected one private note, got %d", fs.posts)
+	}
+}
+
 func TestCancelDeletesSessionAndUpdatesMessage(t *testing.T) {
 	fl := &fakeLinear{}
 	h, fs, repo := newTestHandler(t, fl)
@@ -263,7 +311,8 @@ func seed(t *testing.T, repo store.SessionRepository, sess *store.PokerSession) 
 
 func interaction(userID, actionID, value string) slack.InteractionCallback {
 	return slack.InteractionCallback{
-		User: slack.User{ID: userID},
+		User:        slack.User{ID: userID},
+		ResponseURL: "https://hooks.slack.test/response",
 		ActionCallback: slack.ActionCallbacks{
 			BlockActions: []*slack.BlockAction{
 				{ActionID: actionID, Value: value},

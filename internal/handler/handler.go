@@ -39,6 +39,7 @@ const (
 	actionContinue    = "continue"
 	actionSetEstimate = "set_estimate"
 	actionCancel      = "cancel"
+	actionRetract     = "retract"
 )
 
 // PokerHandler processes poker game logic independent of transport.
@@ -96,6 +97,7 @@ func (h *PokerHandler) HandleInteraction(ctx context.Context, cb slack.Interacti
 	act := actions[0]
 	issueID := act.Value
 	userID := cb.User.ID
+	responseURL := cb.ResponseURL
 
 	sess, err := h.Store.GetSession(ctx, issueID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -119,11 +121,19 @@ func (h *PokerHandler) HandleInteraction(ctx context.Context, cb slack.Interacti
 		if err := h.saveAndRender(ctx, sess); err != nil {
 			return err
 		}
-		// Privately confirm the choice. Slack renders a shared message the same
-		// for everyone, so the only way to show a user their own (still-hidden)
-		// vote is an ephemeral message visible only to them.
-		return h.ephemeralTo(sess.ChannelID, userID,
-			fmt.Sprintf("Your vote: *%s* — hidden until reveal. Pick another card to change it.", label))
+		return h.privateNotice(responseURL,
+			fmt.Sprintf("Your vote: *%s* — hidden until reveal. Pick another card to change it, or retract it.", label))
+
+	case act.ActionID == actionRetract:
+		if _, voted := sess.Votes[userID]; !voted {
+			return h.privateNotice(responseURL, "You have no vote to retract.")
+		}
+		delete(sess.Votes, userID)
+		sess.Status = store.StatusVoting
+		if err := h.saveAndRender(ctx, sess); err != nil {
+			return err
+		}
+		return h.privateNotice(responseURL, "Your vote was retracted.")
 
 	case act.ActionID == actionReveal:
 		sess.Status = store.StatusRevealed
@@ -201,13 +211,23 @@ func (h *PokerHandler) render(ctx context.Context, sess *store.PokerSession) err
 }
 
 func (h *PokerHandler) ephemeral(cmd slack.SlashCommand, text string) error {
-	return h.ephemeralTo(cmd.ChannelID, cmd.UserID, text)
+	_, _, err := h.Slack.PostMessage(cmd.ChannelID,
+		slack.MsgOptionPostEphemeral(cmd.UserID),
+		slack.MsgOptionText(text, false))
+	return err
 }
 
-// ephemeralTo posts a message visible only to userID in the given channel.
-func (h *PokerHandler) ephemeralTo(channelID, userID, text string) error {
-	_, _, err := h.Slack.PostMessage(channelID,
-		slack.MsgOptionPostEphemeral(userID),
+// privateNotice shows a note visible only to the acting user by responding to
+// the interaction's response_url as an ephemeral message. Unlike a fresh
+// chat.postEphemeral on every click, responding through the response_url of the
+// same source message lets Slack refresh the user's single "only visible to
+// you" note in place instead of stacking a new one each vote.
+func (h *PokerHandler) privateNotice(responseURL, text string) error {
+	if responseURL == "" {
+		return nil // e.g. Socket Mode payloads without a response_url; nothing to do
+	}
+	_, _, err := h.Slack.PostMessage("",
+		slack.MsgOptionResponseURL(responseURL, slack.ResponseTypeEphemeral),
 		slack.MsgOptionText(text, false))
 	return err
 }
