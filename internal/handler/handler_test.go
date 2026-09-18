@@ -14,12 +14,14 @@ import (
 
 type fakeSlack struct {
 	postCh, postTS string
+	posts          int
 	updates        int
 	lastUpdateTS   string
 	nextTS         string
 }
 
 func (f *fakeSlack) PostMessage(channelID string, _ ...slack.MsgOption) (string, string, error) {
+	f.posts++
 	f.postCh = channelID
 	ts := f.nextTS
 	if ts == "" {
@@ -125,6 +127,32 @@ func TestVoteRecordsAndUpdates(t *testing.T) {
 	}
 	if fs.updates != 1 || fs.lastUpdateTS != "ts1" {
 		t.Errorf("expected one update to ts1, got updates=%d ts=%q", fs.updates, fs.lastUpdateTS)
+	}
+	// The voter gets a private ephemeral confirmation of their pick.
+	if fs.posts != 1 {
+		t.Errorf("expected 1 ephemeral confirmation post, got %d", fs.posts)
+	}
+}
+
+func TestCancelDeletesSessionAndUpdatesMessage(t *testing.T) {
+	fl := &fakeLinear{}
+	h, fs, repo := newTestHandler(t, fl)
+	seed(t, repo, &store.PokerSession{
+		IssueID: "uuid-1", Status: store.StatusVoting, ChannelID: "C1", MessageTS: "ts1",
+		Votes: map[string]string{"U1": "5"},
+	})
+
+	if err := h.HandleInteraction(context.Background(), interaction("U1", actionCancel, "uuid-1")); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if _, err := repo.GetSession(context.Background(), "uuid-1"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("session should be deleted after cancel")
+	}
+	if fl.setCalled {
+		t.Error("cancel must not write an estimate to Linear")
+	}
+	if fs.updates != 1 || fs.lastUpdateTS != "ts1" {
+		t.Errorf("expected the message to be updated to cancelled state, got updates=%d", fs.updates)
 	}
 }
 

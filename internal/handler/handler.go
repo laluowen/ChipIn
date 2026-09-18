@@ -38,6 +38,7 @@ const (
 	actionReveal      = "reveal"
 	actionContinue    = "continue"
 	actionSetEstimate = "set_estimate"
+	actionCancel      = "cancel"
 )
 
 // PokerHandler processes poker game logic independent of transport.
@@ -115,7 +116,14 @@ func (h *PokerHandler) HandleInteraction(ctx context.Context, cb slack.Interacti
 		}
 		sess.Votes[userID] = label
 		sess.Status = store.StatusVoting
-		return h.saveAndRender(ctx, sess)
+		if err := h.saveAndRender(ctx, sess); err != nil {
+			return err
+		}
+		// Privately confirm the choice. Slack renders a shared message the same
+		// for everyone, so the only way to show a user their own (still-hidden)
+		// vote is an ephemeral message visible only to them.
+		return h.ephemeralTo(sess.ChannelID, userID,
+			fmt.Sprintf("Your vote: *%s* — hidden until reveal. Pick another card to change it.", label))
 
 	case act.ActionID == actionReveal:
 		sess.Status = store.StatusRevealed
@@ -127,6 +135,23 @@ func (h *PokerHandler) HandleInteraction(ctx context.Context, cb slack.Interacti
 
 	case act.ActionID == actionSetEstimate:
 		return h.finalize(ctx, sess)
+
+	case act.ActionID == actionCancel:
+		return h.cancel(ctx, sess)
+	}
+	return nil
+}
+
+// cancel abandons the round: it deletes the session and replaces the message
+// with a cancelled state. No estimate is written to Linear.
+func (h *PokerHandler) cancel(ctx context.Context, sess *store.PokerSession) error {
+	if err := h.Store.DeleteSession(ctx, sess.IssueID); err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	_, _, _, err := h.Slack.UpdateMessage(sess.ChannelID, sess.MessageTS,
+		slack.MsgOptionBlocks(h.cancelBlocks(sess)...))
+	if err != nil {
+		return fmt.Errorf("update cancelled message: %w", err)
 	}
 	return nil
 }
@@ -176,8 +201,13 @@ func (h *PokerHandler) render(ctx context.Context, sess *store.PokerSession) err
 }
 
 func (h *PokerHandler) ephemeral(cmd slack.SlashCommand, text string) error {
-	_, _, err := h.Slack.PostMessage(cmd.ChannelID,
-		slack.MsgOptionPostEphemeral(cmd.UserID),
+	return h.ephemeralTo(cmd.ChannelID, cmd.UserID, text)
+}
+
+// ephemeralTo posts a message visible only to userID in the given channel.
+func (h *PokerHandler) ephemeralTo(channelID, userID, text string) error {
+	_, _, err := h.Slack.PostMessage(channelID,
+		slack.MsgOptionPostEphemeral(userID),
 		slack.MsgOptionText(text, false))
 	return err
 }
