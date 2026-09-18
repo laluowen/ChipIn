@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Warm Potato Chip Orange Gradient -->
+    <linearGradient id="chipGrad" x1="10%" y1="0%" x2="90%" y2="100%">
+      <stop offset="0%" stop-color="#FFD54F" />
+      <stop offset="45%" stop-color="#FF9800" />
+      <stop offset="100%" stop-color="#E65100" />
+    </linearGradient>
+
+    <!-- Top Surface Highlight -->
+    <linearGradient id="highlightGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.6" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
+    </linearGradient>
+
+    <!-- Warm Drop Shadow -->
+    <filter id="chipShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#BF360C" flood-opacity="0.25" />
+    </filter>
+  </defs>
+
+  <g filter="url(#chipShadow)">
+    <!-- Unified Potato Chip + Speech Bubble Tail -->
+    <path d="M 160,110 
+             C 230,70 330,75 390,120 
+             C 450,165 460,240 425,300 
+             C 390,360 310,375 250,360 
+             C 210,350 185,365 155,420 
+             C 148,432 136,425 140,410 
+             C 146,388 142,362 120,342 
+             C 70,295 80,160 160,110 Z" 
+          fill="url(#chipGrad)" />
+
+    <!-- Potato Chip Ruffles / Ridges -->
+    <g stroke="#FFFFFF" stroke-linecap="round" fill="none">
+      <path d="M 180,150 C 240,135 320,160 370,200" stroke-width="12" opacity="0.45" />
+      <path d="M 155,205 C 220,190 300,215 350,260" stroke-width="12" opacity="0.45" />
+      <path d="M 135,260 C 195,245 270,270 320,310" stroke-width="11" opacity="0.38" />
+    </g>
+
+    <!-- Top Edge Rim Light -->
+    <path d="M 165,115 C 230,80 320,85 380,125" 
+          stroke="url(#highlightGrad)" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.7" />
+  </g>
+</svg>
