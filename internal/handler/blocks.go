@@ -55,9 +55,10 @@ func (h *PokerHandler) votingBlocks(sess *store.PokerSession) []slack.Block {
 
 	reveal := slack.NewButtonBlockElement(actionReveal, sess.IssueID, plainText("Reveal votes"))
 	reveal.Style = slack.StylePrimary
+	retract := slack.NewButtonBlockElement(actionRetract, sess.IssueID, plainText("Retract my vote"))
 	cancel := slack.NewButtonBlockElement(actionCancel, sess.IssueID, plainText("Cancel"))
 	cancel.Style = slack.StyleDanger
-	blocks = append(blocks, slack.NewActionBlock("controls", reveal, cancel))
+	blocks = append(blocks, slack.NewActionBlock("controls", reveal, retract, cancel))
 
 	return blocks
 }
