@@ -42,6 +42,15 @@ type PokerSession struct {
     ChannelID  string            // Slack channel
     MessageTS  string            // Slack message ts, for chat.update
     Votes      map[string]string // Slack userID -> vote label
+    Scale      poker.Scale       // estimate points, derived from the Linear team
+    Notices    map[string]Notice // Slack userID -> their private DM notice message
+}
+
+// Notice locates a previously-sent private DM message so it can be updated in
+// place instead of sending a new one on every vote.
+type Notice struct {
+    ChannelID string
+    MessageTS string
 }
 
 type SessionRepository interface {
@@ -54,9 +63,18 @@ type SessionRepository interface {
 
 **Notes / deviations from the original sketch (as built):**
 
-- `Votes` is `map[string]string`, not `map[string]int`. `"?"` is a valid vote, and
-  storing the raw label keeps the summary display faithful. Consensus parses the
-  numeric labels and ignores the rest.
+- `Votes` is `map[string]string`, not `map[string]int`. The value is the display
+  label of the chosen point (e.g. `"5"` or `"M"` for T-shirt scales). There is no
+  `"?"` card — an abstention is simply a missing vote.
+- `Scale` is derived per team from Linear's estimation settings, not hard-coded (see
+  §3). A `poker.Point` is `{Label, Value}`: `Label` is what voters see, `Value` is the
+  number written to Linear. The scale is persisted (SQLite `scale` column) so buttons,
+  vote validation, and consensus all use the same points.
+- Added `Notices`, keyed by Slack user ID, so private vote confirmations can be
+  updated in place (`chat.update`) rather than reposted every vote. Neither
+  `chat.postEphemeral` nor an interaction's `response_url` can be updated/deduped
+  across separate interaction payloads in practice — a real DM message is the only
+  mechanism that supports it. Persisted as the `notices` SQLite column.
 - Added `Identifier`, `Title`, and `MessageTS`. `MessageTS` is required to
   `chat.update` the existing message; `Identifier`/`Title` are for display.
 - Added `Close()` so `main` can release the SQLite handle cleanly.
@@ -90,12 +108,21 @@ behind interfaces so the core stays unit-testable without live services.
 
 1. **Start Session (`/chipin ENG-123`)**
 
-    - Parse the identifier from the Slack command text (`TEAM-123` → team key + number).
+    - Parse the identifier from the Slack command text (`TEAM-123` → team key +
+      number), or from a pasted Linear issue URL.
 
-    - Query `https://api.linear.app/graphql` for the issue (UUID, title, estimate).
+    - Query `https://api.linear.app/graphql` for the issue (UUID, title, estimate)
+      **and its team's estimation settings** (`issueEstimationType`,
+      `issueEstimationExtended`, `issueEstimationAllowZero`).
 
-    - Post a Slack Block Kit message with estimation buttons, then create a
-      `PokerSession` (status `voting`) recording the returned message `ts`.
+    - Build the vote scale with `poker.ScaleFor` (exponential / fibonacci / linear /
+      T-shirt, ± extended, ± zero). If estimation is disabled for the team, reply
+      with an ephemeral error and stop.
+
+    - Post a Slack Block Kit message with one button per scale point (its header
+      hyperlinks the issue identifier to Linear via `Issue.url`), then fetch the
+      message's Slack permalink (`chat.getPermalink`) and create a `PokerSession`
+      (status `voting`, carrying the scale, `IssueURL`, and `MessageLink`).
 2. **Cast Votes (Async)**
 
     - Slack interaction routes to `HandleInteraction`. The issue UUID rides in the
@@ -103,20 +130,29 @@ behind interfaces so the core stays unit-testable without live services.
 
     - App loads the `PokerSession`, updates the `Votes` map, saves it, and fires
       `chat.update` to refresh the UI (individual votes stay hidden while voting).
+      The voter gets a private confirmation via a DM the bot opens with them once
+      and then updates in place on every later vote/retract (see §2.1 `Notices`).
+      The DM links back to the vote message (`<MessageLink|Identifier>`) so the
+      round's context is never more than a click away. Voters can change or
+      **retract** their own vote at any time.
 3. **Reveal ⇄ Continue (toggle)**
 
-    - "Reveal votes" flips status to `revealed`: the UI shows every vote and the
-      recommended consensus (median of numeric votes, snapped to the nearest scale
-      point). This is a **toggle**, not a teardown.
+    - "Reveal votes" flips status to `revealed`: the UI shows every vote, the
+      recommended consensus (the **mode** — the most-voted point, since a median
+      can snap to a value nobody actually cast on a non-linear scale — **ties
+      breaking upward** so we overestimate), and a dropdown prefilled to that
+      recommendation. This is a **toggle**, not a teardown.
 
     - From the summary the round can go back to `voting` ("Continue voting") for
-      another pass, or be locked in with "Set estimate".
+      another pass, be locked in with "Set estimate", or abandoned with "Cancel".
 4. **Set Estimate (lock in)**
 
-    - "Set estimate" executes a GraphQL mutation to Linear to set the issue's
-      estimate to the consensus value, updates the message to the final state, and
-      deletes the `PokerSession` from the store. Stale clicks on a deleted session
-      are ignored.
+    - "Set estimate" reads whatever value is currently selected in the dropdown
+      (defaulting to the consensus if untouched — the team can override after
+      discussion), executes a GraphQL mutation to set the issue's estimate, updates
+      the message to the final state, and deletes the `PokerSession`. "Cancel"
+      deletes the session without writing. Stale clicks on a deleted session are
+      ignored.
 
 ## 4. Environment Configuration
 
@@ -164,7 +200,45 @@ grants its own scoped access:
 
 Until then, keep the personal-key path as the zero-config local/dev mode.
 
-## 6. Build, Release & CI (planned)
+## 6. Issue Context
+
+Every surface where a user encounters a round should carry a path back to its
+source, so nobody has to hunt for "which issue was this again?" or "where's the
+actual vote".
+
+**Implemented:**
+
+- The vote message header hyperlinks the issue identifier to the issue's Linear
+  URL (`Issue.url` from the GraphQL API, persisted as `PokerSession.IssueURL`).
+- Private DM notices (vote confirmations, retractions) link back to the vote
+  message itself via its Slack permalink (`chat.getPermalink`, fetched once when
+  the round starts and persisted as `PokerSession.MessageLink`), rendered as
+  `<permalink|IDENTIFIER>`. Permalink lookup is best-effort: if it fails, notices
+  just fall back to plain text rather than blocking the round from starting.
+
+**Planned: issue description in a thread.** Post the Linear issue's description
+(and other useful attributes — assignee, priority, labels, current estimate if
+any) as a **threaded reply** under the vote message (`thread_ts` = the vote
+message's `ts`), posted once when the round starts. This keeps the primary
+message focused on voting while giving anyone who wants more context a reply to
+expand, without re-fetching Linear or leaving Slack. Notes for whoever picks
+this up:
+
+- Needs `Issue.description` (Markdown) plus whichever attributes are wanted from
+  the existing `FetchIssue` query — extend the GraphQL selection rather than a
+  second round-trip.
+- Linear's description Markdown isn't 1:1 with Slack mrkdwn (e.g. Linear supports
+  nested docs, `+++` collapsible sections, mentions-via-URL); a naive dump will
+  render oddly for anything beyond plain paragraphs/lists. Worth a small
+  Markdown-to-mrkdwn pass rather than posting raw.
+- Post via `chat.postMessage` with `ThreadTimestamp` (`slack.MsgOptionTS`) set to
+  `sess.MessageTS`, right after the main vote message is posted in
+  `HandleSlashCommand`.
+- Not persisted on `PokerSession` — it's a one-time post at round start, nothing
+  to update later, so no new session field is needed (unlike `IssueURL` and
+  `MessageLink`, which are read again on every re-render/DM).
+
+## 7. Build, Release & CI (planned)
 
 - **Toolchain** pinned via `mise` (`mise.toml`): Go + `golangci-lint`.
 - **Lint** with golangci-lint v2 (`.golangci.yaml`: gofumpt/gci formatters +

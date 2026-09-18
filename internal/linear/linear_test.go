@@ -82,7 +82,15 @@ func TestFetchIssue(t *testing.T) {
 			"data": map[string]any{
 				"issues": map[string]any{
 					"nodes": []map[string]any{
-						{"id": "uuid-9", "identifier": "ENG-123", "title": "Speed up", "estimate": est},
+						{
+							"id": "uuid-9", "identifier": "ENG-123", "title": "Speed up", "estimate": est,
+							"url": "https://linear.app/acme/issue/ENG-123/speed-up",
+							"team": map[string]any{
+								"issueEstimationType":      "fibonacci",
+								"issueEstimationExtended":  true,
+								"issueEstimationAllowZero": false,
+							},
+						},
 					},
 				},
 			},
@@ -101,6 +109,12 @@ func TestFetchIssue(t *testing.T) {
 	}
 	if issue.Estimate == nil || *issue.Estimate != 3.0 {
 		t.Errorf("estimate = %v, want 3", issue.Estimate)
+	}
+	if issue.URL != "https://linear.app/acme/issue/ENG-123/speed-up" {
+		t.Errorf("URL = %q", issue.URL)
+	}
+	if issue.EstimationType != "fibonacci" || !issue.EstimationExtended || issue.EstimationAllowZero {
+		t.Errorf("estimation settings = %+v", issue)
 	}
 }
 

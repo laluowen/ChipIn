@@ -24,7 +24,8 @@ Linear OAuth app, are planned — see [`PLAN.md`](./PLAN.md).
 ### 1. Create a Slack app (Socket Mode)
 
 - Enable **Socket Mode**.
-- **OAuth scopes** (bot): `commands`, `chat:write`.
+- **OAuth scopes** (bot): `commands`, `chat:write`, `im:write` (opens a DM per
+  voter for private vote confirmations).
 - **App-level token** scope: `connections:write` → gives you the `xapp-` token.
 - Add a **slash command** `/chipin` and enable **Interactivity**.
 - Install to your workspace to get the `xoxb-` bot token.
