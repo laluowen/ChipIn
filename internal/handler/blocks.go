@@ -20,17 +20,23 @@ func markdown(s string) *slack.TextBlockObject {
 
 // headerBlocks are the title/context lines common to every render. The issue
 // identifier links back to Linear when a URL is known, so the round always
-// carries a path back to the source issue.
+// carries a path back to the source issue. It also attributes the round to
+// whoever started it via /chipin.
 func (h *PokerHandler) headerBlocks(sess *store.PokerSession) []slack.Block {
 	id := sess.Identifier
 	if sess.IssueURL != "" {
 		id = fmt.Sprintf("<%s|%s>", sess.IssueURL, sess.Identifier)
 	}
 	title := fmt.Sprintf("%s — %s", id, sess.Title)
-	return []slack.Block{
+	blocks := []slack.Block{
 		slack.NewHeaderBlock(plainText("Planning Poker")),
 		slack.NewSectionBlock(markdown("*"+title+"*"), nil, nil),
 	}
+	if sess.RequestedBy != "" {
+		blocks = append(blocks, slack.NewContextBlock("",
+			markdown(fmt.Sprintf("Started by <@%s>", sess.RequestedBy))))
+	}
+	return blocks
 }
 
 // votingBlocks renders the vote-in-progress UI: hidden tallies, one button per

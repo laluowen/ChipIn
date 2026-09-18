@@ -24,19 +24,25 @@ CREATE TABLE IF NOT EXISTS sessions (
 	message_ts   TEXT NOT NULL,
 	votes        TEXT NOT NULL,
 	scale        TEXT NOT NULL DEFAULT '[]',
-	notices      TEXT NOT NULL DEFAULT '{}',
 	issue_url    TEXT NOT NULL DEFAULT '',
-	message_link TEXT NOT NULL DEFAULT ''
+	message_link TEXT NOT NULL DEFAULT '',
+	requested_by TEXT NOT NULL DEFAULT ''
 );`
 
 // migratedColumns lists columns added after the table's initial creation,
 // each with the default to backfill on existing rows.
 var migratedColumns = map[string]string{
 	"scale":        "TEXT NOT NULL DEFAULT '[]'",
-	"notices":      "TEXT NOT NULL DEFAULT '{}'",
 	"issue_url":    "TEXT NOT NULL DEFAULT ''",
 	"message_link": "TEXT NOT NULL DEFAULT ''",
+	"requested_by": "TEXT NOT NULL DEFAULT ''",
 }
+
+// obsoleteColumns lists columns from a since-abandoned design (a DM-based
+// private-notice mechanism, keyed per user) that should be dropped if found on
+// an existing database. SQLite has supported DROP COLUMN since 3.35 (2021),
+// well within what modernc.org/sqlite bundles.
+var obsoleteColumns = []string{"notices"}
 
 // NewSQLite opens (creating if needed) a SQLite database at path and ensures
 // the schema exists, migrating older databases forward. Use ":memory:" for an
@@ -60,10 +66,11 @@ func NewSQLite(path string) (*SQLite, error) {
 	return &SQLite{db: db}, nil
 }
 
-// migrate adds columns introduced after a database's initial creation.
-// CREATE TABLE IF NOT EXISTS is a no-op against an existing table, so a
-// pre-existing sessions table (from before these columns existed) needs an
-// explicit ALTER TABLE to catch up.
+// migrate reconciles the sessions table with the current schema.
+// CREATE TABLE IF NOT EXISTS is a no-op against an existing table, so columns
+// added or removed after a database's initial creation need explicit ALTER
+// TABLE statements to catch up: ADD COLUMN for new fields, DROP COLUMN for
+// abandoned ones (see obsoleteColumns).
 func migrate(db *sql.DB) error {
 	rows, err := db.Query(`PRAGMA table_info(sessions)`)
 	if err != nil {
@@ -95,20 +102,29 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("add %s column: %w", col, err)
 		}
 	}
+
+	for _, col := range obsoleteColumns {
+		if !existing[col] {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE sessions DROP COLUMN %s`, col)); err != nil {
+			return fmt.Errorf("drop %s column: %w", col, err)
+		}
+	}
 	return nil
 }
 
 // GetSession returns the session for issueID, or ErrNotFound.
 func (s *SQLite) GetSession(ctx context.Context, issueID string) (*PokerSession, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT issue_id, identifier, title, status, channel_id, message_ts, votes, scale, notices, issue_url, message_link
+		`SELECT issue_id, identifier, title, status, channel_id, message_ts, votes, scale, issue_url, message_link, requested_by
 		 FROM sessions WHERE issue_id = ?`, issueID)
 
 	var sess PokerSession
-	var votesJSON, scaleJSON, noticesJSON string
+	var votesJSON, scaleJSON string
 	err := row.Scan(&sess.IssueID, &sess.Identifier, &sess.Title,
-		&sess.Status, &sess.ChannelID, &sess.MessageTS, &votesJSON, &scaleJSON, &noticesJSON,
-		&sess.IssueURL, &sess.MessageLink)
+		&sess.Status, &sess.ChannelID, &sess.MessageTS, &votesJSON, &scaleJSON,
+		&sess.IssueURL, &sess.MessageLink, &sess.RequestedBy)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -121,9 +137,6 @@ func (s *SQLite) GetSession(ctx context.Context, issueID string) (*PokerSession,
 	if err := json.Unmarshal([]byte(scaleJSON), &sess.Scale); err != nil {
 		return nil, fmt.Errorf("decode scale: %w", err)
 	}
-	if err := json.Unmarshal([]byte(noticesJSON), &sess.Notices); err != nil {
-		return nil, fmt.Errorf("decode notices: %w", err)
-	}
 	return &sess, nil
 }
 
@@ -131,9 +144,6 @@ func (s *SQLite) GetSession(ctx context.Context, issueID string) (*PokerSession,
 func (s *SQLite) SaveSession(ctx context.Context, sess *PokerSession) error {
 	if sess.Votes == nil {
 		sess.Votes = map[string]string{}
-	}
-	if sess.Notices == nil {
-		sess.Notices = map[string]Notice{}
 	}
 	votesJSON, err := json.Marshal(sess.Votes)
 	if err != nil {
@@ -143,13 +153,9 @@ func (s *SQLite) SaveSession(ctx context.Context, sess *PokerSession) error {
 	if err != nil {
 		return fmt.Errorf("encode scale: %w", err)
 	}
-	noticesJSON, err := json.Marshal(sess.Notices)
-	if err != nil {
-		return fmt.Errorf("encode notices: %w", err)
-	}
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO sessions
-			(issue_id, identifier, title, status, channel_id, message_ts, votes, scale, notices, issue_url, message_link)
+			(issue_id, identifier, title, status, channel_id, message_ts, votes, scale, issue_url, message_link, requested_by)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(issue_id) DO UPDATE SET
 			identifier   = excluded.identifier,
@@ -159,12 +165,12 @@ func (s *SQLite) SaveSession(ctx context.Context, sess *PokerSession) error {
 			message_ts   = excluded.message_ts,
 			votes        = excluded.votes,
 			scale        = excluded.scale,
-			notices      = excluded.notices,
 			issue_url    = excluded.issue_url,
-			message_link = excluded.message_link`,
+			message_link = excluded.message_link,
+			requested_by = excluded.requested_by`,
 		sess.IssueID, sess.Identifier, sess.Title, sess.Status,
-		sess.ChannelID, sess.MessageTS, string(votesJSON), string(scaleJSON), string(noticesJSON),
-		sess.IssueURL, sess.MessageLink)
+		sess.ChannelID, sess.MessageTS, string(votesJSON), string(scaleJSON),
+		sess.IssueURL, sess.MessageLink, sess.RequestedBy)
 	if err != nil {
 		return fmt.Errorf("save session: %w", err)
 	}

@@ -22,7 +22,6 @@ import (
 type SlackAPI interface {
 	PostMessage(channelID string, options ...slack.MsgOption) (string, string, error)
 	UpdateMessage(channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error)
-	OpenConversation(params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error)
 	GetPermalink(params *slack.PermalinkParameters) (string, error)
 }
 
@@ -77,14 +76,15 @@ func (h *PokerHandler) HandleSlashCommand(ctx context.Context, cmd slack.SlashCo
 	}
 
 	sess := &store.PokerSession{
-		IssueID:    issue.ID,
-		Identifier: issue.Identifier,
-		Title:      issue.Title,
-		IssueURL:   issue.URL,
-		Status:     store.StatusVoting,
-		ChannelID:  cmd.ChannelID,
-		Votes:      map[string]string{},
-		Scale:      scale,
+		IssueID:     issue.ID,
+		Identifier:  issue.Identifier,
+		Title:       issue.Title,
+		IssueURL:    issue.URL,
+		Status:      store.StatusVoting,
+		ChannelID:   cmd.ChannelID,
+		RequestedBy: cmd.UserID,
+		Votes:       map[string]string{},
+		Scale:       scale,
 	}
 
 	_, ts, err := h.Slack.PostMessage(cmd.ChannelID, slack.MsgOptionBlocks(h.votingBlocks(sess)...))
@@ -93,8 +93,9 @@ func (h *PokerHandler) HandleSlashCommand(ctx context.Context, cmd slack.SlashCo
 	}
 	sess.MessageTS = ts
 
-	// Best-effort: a permalink lets private DM notices link back to this
-	// message for context. If it fails, notices just fall back to plain text.
+	// Best-effort: a permalink lets private vote notices compactly link back to
+	// this message (as the hyperlinked issue key) instead of just a bare
+	// mention. If it fails, notices just fall back to plain text.
 	if link, err := h.Slack.GetPermalink(&slack.PermalinkParameters{Channel: cmd.ChannelID, Ts: ts}); err == nil {
 		sess.MessageLink = link
 	}
@@ -137,19 +138,19 @@ func (h *PokerHandler) HandleInteraction(ctx context.Context, cb slack.Interacti
 		if err := h.saveAndRender(ctx, sess); err != nil {
 			return err
 		}
-		return h.sendPrivateNotice(ctx, sess, userID,
+		return h.privateNotice(sess, userID,
 			fmt.Sprintf("Your vote: *%s* — hidden until reveal. Pick another card to change it, or retract it.", label))
 
 	case act.ActionID == actionRetract:
 		if _, voted := sess.Votes[userID]; !voted {
-			return h.sendPrivateNotice(ctx, sess, userID, "You have no vote to retract.")
+			return h.privateNotice(sess, userID, "You have no vote to retract.")
 		}
 		delete(sess.Votes, userID)
 		sess.Status = store.StatusVoting
 		if err := h.saveAndRender(ctx, sess); err != nil {
 			return err
 		}
-		return h.sendPrivateNotice(ctx, sess, userID, "Your vote was retracted.")
+		return h.privateNotice(sess, userID, "Your vote was retracted.")
 
 	case act.ActionID == actionReveal:
 		sess.Status = store.StatusRevealed
@@ -255,47 +256,34 @@ func (h *PokerHandler) ephemeral(cmd slack.SlashCommand, text string) error {
 	return err
 }
 
-// sendPrivateNotice shows userID a note only they can see, without leaking
-// their (still-hidden) vote to the channel. Slack's chat.postEphemeral cannot
-// be updated, and responding to an interaction's response_url as ephemeral
-// does not replace a prior response either — each call posts a brand new
-// message, which stacked one per vote. So instead we DM the user directly: the
-// first notice opens (or resumes) a DM and remembers its channel+timestamp on
-// the session; every later notice calls chat.update on that same message.
+// privateNotice shows userID a note only they can see.
 //
-// The DM links back to the vote message (via its Slack permalink) so the
-// round's context — the issue and the buttons — is never more than a click
-// away from the private confirmation.
-func (h *PokerHandler) sendPrivateNotice(ctx context.Context, sess *store.PokerSession, userID, body string) error {
-	if sess.Notices == nil {
-		sess.Notices = map[string]store.Notice{}
-	}
-	text := body
+// This is a plain chat.postEphemeral on every call — Slack gives us no way to
+// avoid that. A DM-based "one message, updated in place" approach was tried
+// and reverted: it added a real message + conversations.open + a persisted
+// per-user reference just to work around ephemeral's limitations, and that
+// was more moving parts than the win was worth.
+//
+// The message is prefixed with the issue key, hyperlinked to the vote message
+// when a permalink is on file. NOTE: chat.postEphemeral has no
+// unfurl_links/unfurl_media parameters at all (unlike chat.postMessage), so
+// there's no *documented, guaranteed* way to control unfurling here. We link
+// anyway on the strength of: (a) chat.postEphemeral's own docs list no
+// unfurl-related fields, and (b) Slack's classic-unfurl docs explicitly scope
+// automatic unfurling to chat.postMessage and incoming webhooks, never
+// mentioning postEphemeral. If that assumption turns out wrong in practice
+// (an unfurled preview shows up), drop the hyperlink and fall back to a plain
+// "*<identifier>*: " prefix — a one-line revert, see git history.
+func (h *PokerHandler) privateNotice(sess *store.PokerSession, userID, body string) error {
+	prefix := sess.Identifier
 	if sess.MessageLink != "" {
-		text = fmt.Sprintf("<%s|%s>\n%s", sess.MessageLink, sess.Identifier, body)
+		prefix = fmt.Sprintf("<%s|%s>", sess.MessageLink, sess.Identifier)
 	}
-
-	if n, ok := sess.Notices[userID]; ok {
-		if _, _, _, err := h.Slack.UpdateMessage(n.ChannelID, n.MessageTS, slack.MsgOptionText(text, false)); err == nil {
-			return nil
-		}
-		// Fall through: the remembered message may have been deleted or the
-		// reference stale. Re-open the DM and send fresh below.
-	}
-
-	channel, _, _, err := h.Slack.OpenConversation(&slack.OpenConversationParameters{Users: []string{userID}})
-	if err != nil {
-		return fmt.Errorf("open DM with user: %w", err)
-	}
-	_, ts, err := h.Slack.PostMessage(channel.ID, slack.MsgOptionText(text, false))
-	if err != nil {
-		return fmt.Errorf("send private notice: %w", err)
-	}
-	sess.Notices[userID] = store.Notice{ChannelID: channel.ID, MessageTS: ts}
-	if err := h.Store.SaveSession(ctx, sess); err != nil {
-		return fmt.Errorf("save session: %w", err)
-	}
-	return nil
+	text := fmt.Sprintf("*%s*: %s", prefix, body)
+	_, _, err := h.Slack.PostMessage(sess.ChannelID,
+		slack.MsgOptionPostEphemeral(userID),
+		slack.MsgOptionText(text, false))
+	return err
 }
 
 // sortedVoters returns the userIDs that have voted, sorted for stable display.
