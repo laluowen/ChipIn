@@ -1,4 +1,4 @@
-// Command chipin is a self-hosted async planning-poker bot for Slack + Linear.
+// Command ChipIn is a self-hosted async planning-poker bot for Slack + Linear.
 // This entrypoint runs the local Socket Mode transport backed by SQLite.
 package main
 
@@ -10,11 +10,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/laluowen/chipin/internal/config"
-	"github.com/laluowen/chipin/internal/handler"
-	"github.com/laluowen/chipin/internal/linear"
-	"github.com/laluowen/chipin/internal/socket"
-	"github.com/laluowen/chipin/internal/store"
+	"github.com/laluowen/ChipIn/internal/config"
+	"github.com/laluowen/ChipIn/internal/handler"
+	"github.com/laluowen/ChipIn/internal/linear"
+	"github.com/laluowen/ChipIn/internal/socket"
+	"github.com/laluowen/ChipIn/internal/store"
 	"github.com/slack-go/slack"
 )
 
@@ -23,14 +23,14 @@ var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "chipin:", err)
+		fmt.Fprintln(os.Stderr, "ChipIn:", err)
 		os.Exit(1)
 	}
 }
 
 func run() error {
 	logger := log.New(os.Stderr, "", log.LstdFlags)
-	logger.Printf("chipin %s starting", version)
+	logger.Printf("ChipIn %s starting", version)
 
 	cfg, err := config.Load()
 	if err != nil {

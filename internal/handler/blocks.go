@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/laluowen/chipin/internal/store"
+	"github.com/laluowen/ChipIn/internal/store"
 	"github.com/slack-go/slack"
 )
 

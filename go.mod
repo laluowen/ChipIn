@@ -1,4 +1,4 @@
-module github.com/laluowen/chipin
+module github.com/laluowen/ChipIn
 
 go 1.27.1
 

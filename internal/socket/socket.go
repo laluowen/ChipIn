@@ -7,7 +7,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/laluowen/chipin/internal/handler"
+	"github.com/laluowen/ChipIn/internal/handler"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/socketmode"
 )

@@ -1,4 +1,4 @@
-// Package config loads chipin's runtime configuration from the environment.
+// Package config loads ChipIn's runtime configuration from the environment.
 package config
 
 import (
