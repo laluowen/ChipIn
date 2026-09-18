@@ -39,6 +39,32 @@ func TestParseIdentifier(t *testing.T) {
 	}
 }
 
+func TestExtractIdentifierFromURL(t *testing.T) {
+	cases := map[string]string{
+		"https://linear.app/lalu-uk/issue/LALU-321":                                              "LALU-321",
+		"https://linear.app/lalu-uk/issue/LALU-321/finish-the-mobile-login-demo-and-local-setup": "LALU-321",
+		"linear.app/acme/issue/ENG-7":                                                            "ENG-7",
+		"  https://linear.app/lalu-uk/issue/LALU-1  ":                                            "LALU-1",
+		"ENG-123":   "ENG-123", // bare passes through
+		"not a url": "not a url",
+	}
+	for in, want := range cases {
+		if got := extractIdentifier(in); got != want {
+			t.Errorf("extractIdentifier(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestParseIdentifierAcceptsURL(t *testing.T) {
+	team, num, err := parseIdentifier("https://linear.app/lalu-uk/issue/LALU-321/some-slug")
+	if err != nil {
+		t.Fatalf("parseIdentifier(url): %v", err)
+	}
+	if team != "LALU" || num != 321 {
+		t.Errorf("got %q,%v want LALU,321", team, num)
+	}
+}
+
 func TestFetchIssue(t *testing.T) {
 	est := 3.0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -55,7 +55,9 @@ func (h *PokerHandler) votingBlocks(sess *store.PokerSession) []slack.Block {
 
 	reveal := slack.NewButtonBlockElement(actionReveal, sess.IssueID, plainText("Reveal votes"))
 	reveal.Style = slack.StylePrimary
-	blocks = append(blocks, slack.NewActionBlock("controls", reveal))
+	cancel := slack.NewButtonBlockElement(actionCancel, sess.IssueID, plainText("Cancel"))
+	cancel.Style = slack.StyleDanger
+	blocks = append(blocks, slack.NewActionBlock("controls", reveal, cancel))
 
 	return blocks
 }
@@ -91,8 +93,18 @@ func (h *PokerHandler) summaryBlocks(sess *store.PokerSession) []slack.Block {
 	if !ok {
 		set.Style = slack.StyleDefault
 	}
-	blocks = append(blocks, slack.NewActionBlock("controls", cont, set))
+	cancel := slack.NewButtonBlockElement(actionCancel, sess.IssueID, plainText("Cancel"))
+	cancel.Style = slack.StyleDanger
+	blocks = append(blocks, slack.NewActionBlock("controls", cont, set, cancel))
 
+	return blocks
+}
+
+// cancelBlocks renders the abandoned state after a round is cancelled.
+func (h *PokerHandler) cancelBlocks(sess *store.PokerSession) []slack.Block {
+	blocks := h.headerBlocks(sess)
+	blocks = append(blocks, slack.NewSectionBlock(
+		markdown(":x: Estimation cancelled. No estimate was saved."), nil, nil))
 	return blocks
 }
 

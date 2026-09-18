@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -115,9 +116,24 @@ func (c *Client) SetEstimate(ctx context.Context, issueID string, estimate float
 	return nil
 }
 
-// parseIdentifier splits "ENG-123" into team key and issue number.
+// issueURLRe matches a Linear issue URL of the form
+// linear.app/<workspace>/issue/<IDENTIFIER>[/<slug>], capturing the identifier.
+var issueURLRe = regexp.MustCompile(`linear\.app/[^/\s]+/issue/([A-Za-z][A-Za-z0-9_]*-\d+)`)
+
+// extractIdentifier accepts either a bare identifier ("ENG-123") or a pasted
+// Linear issue URL and returns the bare identifier.
+func extractIdentifier(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if m := issueURLRe.FindStringSubmatch(raw); m != nil {
+		return m[1]
+	}
+	return raw
+}
+
+// parseIdentifier splits "ENG-123" (or a pasted Linear URL) into team key and
+// issue number.
 func parseIdentifier(identifier string) (teamKey string, number float64, err error) {
-	identifier = strings.TrimSpace(identifier)
+	identifier = extractIdentifier(identifier)
 	i := strings.LastIndex(identifier, "-")
 	if i <= 0 || i == len(identifier)-1 {
 		return "", 0, fmt.Errorf("invalid issue identifier %q, expected form TEAM-123", identifier)
