@@ -11,9 +11,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/laluowen/chipin/internal/linear"
-	"github.com/laluowen/chipin/internal/poker"
-	"github.com/laluowen/chipin/internal/store"
+	"github.com/laluowen/ChipIn/internal/linear"
+	"github.com/laluowen/ChipIn/internal/poker"
+	"github.com/laluowen/ChipIn/internal/store"
 	"github.com/slack-go/slack"
 )
 
@@ -53,11 +53,11 @@ func New(s SlackAPI, l LinearAPI, repo store.SessionRepository) *PokerHandler {
 	return &PokerHandler{Slack: s, Linear: l, Store: repo, Scale: poker.Fibonacci}
 }
 
-// HandleSlashCommand starts a new estimation round from `/poker ENG-123`.
+// HandleSlashCommand starts a new estimation round from `/chipin ENG-123`.
 func (h *PokerHandler) HandleSlashCommand(ctx context.Context, cmd slack.SlashCommand) error {
 	identifier := strings.TrimSpace(cmd.Text)
 	if identifier == "" {
-		return h.ephemeral(cmd, "Usage: `/poker ENG-123`")
+		return h.ephemeral(cmd, "Usage: `/chipin ENG-123`")
 	}
 
 	issue, err := h.Linear.FetchIssue(ctx, identifier)

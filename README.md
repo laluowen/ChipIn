@@ -1,8 +1,8 @@
-# chipin
+# ChipIn
 
 Self-hosted **async planning poker** for Slack + Linear, as a single static Go binary.
 
-Run `/poker ENG-123` in Slack. chipin posts a card-voting message, collects votes
+Run `/chipin ENG-123` in Slack. Chip posts a card-voting message, collects votes
 asynchronously, reveals a recommended estimate (median of the votes, snapped to the
 Fibonacci scale), and — once you lock it in — writes that estimate back to the Linear
 issue.
@@ -13,7 +13,7 @@ Linear OAuth app, are planned — see [`PLAN.md`](./PLAN.md).
 
 ## The flow
 
-1. `/poker ENG-123` → chipin fetches the issue from Linear and posts a voting card.
+1. `/chipin ENG-123` → Chip fetches the issue from Linear and posts a voting card.
 2. Everyone clicks a card (`1 2 3 5 8 13 21 ?`). Votes stay hidden while voting.
 3. **Reveal votes** → shows every vote and the recommended estimate.
 4. From there, either **Continue voting** (back to hidden voting for another round)
@@ -26,7 +26,7 @@ Linear OAuth app, are planned — see [`PLAN.md`](./PLAN.md).
 - Enable **Socket Mode**.
 - **OAuth scopes** (bot): `commands`, `chat:write`.
 - **App-level token** scope: `connections:write` → gives you the `xapp-` token.
-- Add a **slash command** `/poker` and enable **Interactivity**.
+- Add a **slash command** `/chipin` and enable **Interactivity**.
 - Install to your workspace to get the `xoxb-` bot token.
 
 ### 2. Get a Linear personal API key

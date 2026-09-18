@@ -88,7 +88,7 @@ behind interfaces so the core stays unit-testable without live services.
 
 ## 3. The Execution Flow
 
-1. **Start Session (`/poker ENG-123`)**
+1. **Start Session (`/chipin ENG-123`)**
 
     - Parse the identifier from the Slack command text (`TEAM-123` → team key + number).
 
@@ -140,7 +140,7 @@ behind interfaces so the core stays unit-testable without live services.
 
 The proof-of-concept authenticates to Linear with a single **personal API key**
 (`LINEAR_API_KEY`), sent as-is in the `Authorization` header. This is fine for one
-user/workspace but does not scale to distributing chipin as an installable app.
+user/workspace but does not scale to distributing ChipIn as an installable app.
 
 The intended end state is a full **Linear OAuth 2.0 application** so each workspace
 grants its own scoped access:

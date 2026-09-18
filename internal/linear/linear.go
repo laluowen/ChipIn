@@ -1,5 +1,5 @@
 // Package linear is a minimal client for the Linear GraphQL API covering the
-// operations chipin needs: looking up an issue by its human identifier and
+// operations ChipIn needs: looking up an issue by its human identifier and
 // updating its estimate. It uses net/http directly rather than a GraphQL SDK.
 package linear
 
@@ -52,7 +52,7 @@ func New(token string, opts ...Option) *Client {
 	return c
 }
 
-// Issue is the subset of a Linear issue chipin cares about.
+// Issue is the subset of a Linear issue ChipIn cares about.
 type Issue struct {
 	ID         string // UUID
 	Identifier string // e.g. "ENG-123"

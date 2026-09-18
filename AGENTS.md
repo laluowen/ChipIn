@@ -1,4 +1,4 @@
-# chipin — Agent/Developer Notes
+# ChipIn — Agent/Developer Notes
 
 ## What this is
 
@@ -49,7 +49,7 @@ see `PLAN.md`.
 ## Slack app scopes (Socket Mode)
 
 Bot token needs: `commands`, `chat:write`. App-level token needs `connections:write`.
-Enable Socket Mode, add a `/poker` slash command, and enable Interactivity.
+Enable Socket Mode, add a `/chipin` slash command, and enable Interactivity.
 
 ## Env vars (local)
 
