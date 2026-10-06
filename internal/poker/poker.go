@@ -15,8 +15,8 @@ import (
 
 // Point is a single selectable estimate on a scale.
 type Point struct {
-	Label string  `json:"label"` // display label, e.g. "5" or "M"
-	Value float64 `json:"value"` // numeric estimate written to Linear
+	Label string  `json:"label" firestore:"label"` // display label, e.g. "5" or "M"
+	Value float64 `json:"value" firestore:"value"` // numeric estimate written to Linear
 }
 
 // Scale is an ordered set of estimate points.

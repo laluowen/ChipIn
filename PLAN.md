@@ -8,21 +8,41 @@ A single, statically compiled Go binary capable of operating in two distinct dep
 
 - **Language:** Go (Golang 1.21+)
 - **Base Container Image:** `gcr.io/distroless/static-debian12`
-- **Slack Integration:** `[github.com/slack-go/slack](https://github.com/slack-go/slack)`
+- **Slack Integration:** [github.com/slack-go/slack](https://github.com/slack-go/slack)
 - **Linear Integration:** Standard `net/http` client executing raw GraphQL queries.
 
 ### 1.2 Deployment Modes
 
-- **Mode A: Local / Private Network (Socket Mode)**
+Both modes ship in the same binary, selected at startup by the `ENVIRONMENT`
+environment variable (`local` | `gcp`; see `internal/config`). `cmd/chipin`'s
+`run()` branches once into `runSocket` or `runWebhook`; everything below that
+(`internal/handler`, `internal/poker`, `internal/linear`) is shared and
+doesn't know which mode it's running under.
 
-    - **Transport:** Outbound WebSockets.
+- **Mode A: Local / Private Network (Socket Mode)** — `ENVIRONMENT=local` (default)
 
-    - **State:** Local SQLite database.
-- **Mode B: Serverless / Cloud Run (Webhook Mode)**
+    - **Transport:** Outbound WebSockets (`internal/socket`).
 
-    - **Transport:** HTTP Webhooks.
+    - **State:** Local SQLite database (`store.SQLite`).
+- **Mode B: Serverless / Cloud Run (Webhook Mode)** — `ENVIRONMENT=gcp`
 
-    - **State:** Google Cloud Firestore.
+    - **Transport:** HTTP Webhooks (`internal/webhook`), signature-verified
+      with the Slack signing secret.
+
+    - **State:** Google Cloud Firestore (`store.Firestore`).
+
+    - **Ack strategy:** requests are handled **synchronously** — the handler
+      runs to completion before the HTTP response is written, same as Mode
+      A's immediate-ack-then-process shape in spirit but inverted (there's no
+      separate ack step over HTTP; the response *is* the ack). Slack requires
+      a response within 3s; on Cloud Run a cold start eats into that budget.
+      This was a deliberate simplicity-over-robustness tradeoff for the first
+      cut — no goroutine-after-response (which needs Cloud Run's "CPU always
+      allocated" setting to avoid being frozen mid-flight) and no Cloud Tasks
+      queue. If timeouts show up in practice, the escape hatches are, in
+      order of effort: set `min-instances=1` to kill cold starts, enable
+      CPU-always-allocated and move the handler call into a goroutine, or
+      defer the real work to a Cloud Tasks queue and a second endpoint.
 
 ## 2. Abstraction Boundaries
 
@@ -161,19 +181,28 @@ behind interfaces so the core stays unit-testable without live services.
 
 ### For Local / Socket Mode (implemented)
 
+- `ENVIRONMENT=local` (default — can be omitted)
 - `SLACK_APP_TOKEN` (xapp-...)
 - `SLACK_BOT_TOKEN` (xoxb-...)
 - `LINEAR_API_KEY` (Linear personal API key)
 - `DB_PATH` (optional; defaults to `./chipin.db`)
 
-### For Cloud Run / Webhook Mode (planned)
+### For Cloud Run / Webhook Mode (implemented)
 
-- `PORT` (Provided automatically by Cloud Run)
+- `ENVIRONMENT=gcp`
+- `PORT` (optional; defaults to `8080` — Cloud Run provides this automatically)
 - `SLACK_BOT_TOKEN` (xoxb-...)
-- `SLACK_SIGNING_SECRET`
+- `SLACK_SIGNING_SECRET` (verifies inbound requests; from the Slack app's Basic
+  Information page)
 - `LINEAR_API_KEY`
-- `DB_TYPE=firestore`
-- `GCP_PROJECT_ID`
+- `GCP_PROJECT_ID` (Firestore project)
+- `FIRESTORE_DATABASE_ID` (optional; defaults to `"(default)"`)
+
+Point the Slack app's Slash Command and Interactivity request URLs at
+`https://<cloud-run-url>/slack/commands` and `.../slack/interactions`
+respectively. Socket Mode must be *disabled* for this mode (Slack treats
+Socket Mode and HTTP request URLs as mutually exclusive per app). A `GET
+/healthz` endpoint is included for Cloud Run's startup/liveness probes.
 
 ## 5. Linear OAuth App (planned)
 

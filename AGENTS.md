@@ -2,30 +2,45 @@
 
 ## What this is
 
-Self-hosted async planning poker for Slack + Linear. A single static Go binary.
-Currently implements **Mode A** only: local Slack Socket Mode + SQLite + a Linear
-personal API key. Mode B (HTTP webhooks + Firestore) is planned but not built —
-see `PLAN.md`.
+Self-hosted async planning poker for Slack + Linear. A single static Go binary
+that runs in either of two modes, selected by `ENVIRONMENT` (`local` | `gcp`):
+**Mode A** — local Slack Socket Mode + SQLite + a Linear personal API key —
+and **Mode B** — Cloud Run HTTP webhooks + Firestore. Both are implemented;
+see `PLAN.md`. The Linear OAuth app (§5) and CI/release pipeline (§7) are
+still planned.
 
 ## Layout
 
-- `cmd/chipin` — entrypoint; wires config → store → slack/linear clients → handler → socket runner.
+- `cmd/chipin` — entrypoint; `run()` branches on `ENVIRONMENT` into
+  `runSocket` (Mode A: config → SQLite → slack/linear clients → handler →
+  socket runner) or `runWebhook` (Mode B: config → Firestore → slack/linear
+  clients → handler → webhook server).
 - `internal/poker` — pure domain logic (vote scale, consensus). No I/O. Test aggressively.
-- `internal/store` — `SessionRepository` interface + types; `SQLite` implementation (pure-Go driver).
+- `internal/store` — `SessionRepository` interface + types; `SQLite` (pure-Go driver, Mode A)
+  and `Firestore` (Mode B) implementations.
 - `internal/linear` — minimal GraphQL client (fetch issue by identifier, set estimate).
 - `internal/handler` — transport-agnostic game logic + Block Kit builders. The core.
 - `internal/socket` — Socket Mode receive loop; adapts Slack events onto the handler.
-- `internal/config` — env loading.
+- `internal/webhook` — HTTP webhook server (signature-verified slash commands +
+  interactions); adapts Slack HTTP requests onto the same handler.
+- `internal/config` — env loading; `Config.Environment` picks which of the
+  above two wire up.
 
 ## Testing
 
 - Run `go test ./...` after every non-trivial change. Everything except the socket
-  loop and `main` is unit-tested.
-- `internal/store` tests use `:memory:` SQLite — no fixtures, no cleanup files.
+  loop, webhook HTTP wiring smoke tests, and `main` is unit-tested.
+- `internal/store` SQLite tests use `:memory:` — no fixtures, no cleanup files.
+  Firestore tests are gated behind `FIRESTORE_EMULATOR_HOST`
+  (`gcloud emulators firestore start --host-port=localhost:8219`) and
+  auto-skip when it's unset — no live Firestore calls.
 - `internal/linear` tests use `httptest.Server` — no live Linear calls.
 - `internal/handler` tests use fake `SlackAPI`/`LinearAPI` + in-memory store. The
   handler depends on narrow interfaces precisely so it stays testable without live
   services. Keep it that way: do not import `*slack.Client` concretely into logic.
+- `internal/webhook` tests construct a real `handler.PokerHandler` over fakes +
+  `:memory:` SQLite, and drive it through `httptest` with hand-computed Slack
+  signatures — no live Slack calls.
 - There are no integration tests against live Slack/Linear yet. If added, gate them
   behind `testing.Short()` and an env var, following the opqr pattern.
 
