@@ -1,4 +1,4 @@
 [tools]
 "core:go" = "1.27.1"
-"core:java" = "corretto-25.0.4.10.1"
+"core:java" = "corretto-25.0.4+101.0.LTS"
 "github:golangci/golangci-lint" = "2.13.2"
