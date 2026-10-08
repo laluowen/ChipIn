@@ -1,5 +1,9 @@
 # ChipIn
 
+<p align="center">
+  <img src="./logo.png">
+</p>
+
 Self-hosted **async planning poker** for Slack + Linear, as a single static Go binary.
 
 Run `/chipin ENG-123` in Slack. Chip posts a card-voting message, collects votes
