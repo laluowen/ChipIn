@@ -113,9 +113,19 @@ func (h *PokerHandler) HandleInteraction(ctx context.Context, cb slack.Interacti
 		return nil
 	}
 	act := actions[0]
-	issueID := act.Value
 	userID := cb.User.ID
 
+	// The estimate dropdown is a select element, not a button: Slack select
+	// actions carry no Value at all (the chosen option rides in
+	// act.SelectedOption instead), so act.Value would be "" here. Bail out
+	// before touching the store — an empty issue ID isn't just "not found",
+	// some backends (Firestore) reject it outright as a malformed document
+	// path, which previously surfaced as a 500 on every dropdown selection.
+	if act.ActionID == actionEstimateSelect {
+		return nil
+	}
+
+	issueID := act.Value
 	sess, err := h.Store.GetSession(ctx, issueID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil // round already finished; ignore stale click
@@ -159,12 +169,6 @@ func (h *PokerHandler) HandleInteraction(ctx context.Context, cb slack.Interacti
 	case act.ActionID == actionContinue:
 		sess.Status = store.StatusVoting
 		return h.saveAndRender(ctx, sess)
-
-	case act.ActionID == actionEstimateSelect:
-		// Changing the estimate dropdown carries no issue UUID and needs no
-		// state change; the chosen value is read from the payload when
-		// "Set estimate" is pressed. Nothing to do here.
-		return nil
 
 	case act.ActionID == actionSetEstimate:
 		point, ok := h.chosenEstimate(cb, sess)

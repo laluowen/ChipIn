@@ -456,6 +456,28 @@ func TestStaleInteractionIgnored(t *testing.T) {
 	}
 }
 
+// explodingStore fails any call with a non-ErrNotFound error, standing in for
+// a backend (like Firestore) that rejects an empty issue ID outright instead
+// of reporting it as merely missing.
+type explodingStore struct{ store.SessionRepository }
+
+func (explodingStore) GetSession(context.Context, string) (*store.PokerSession, error) {
+	return nil, errors.New("boom: backend rejected empty document ID")
+}
+
+// TestEstimateSelectDoesNotTouchStore guards against a regression: the
+// estimate dropdown is a select element, so Slack's BlockAction carries no
+// Value (that's only populated for buttons) — act.Value is "". Looking up a
+// session by that empty ID must never happen; on Firestore it surfaced as a
+// 500 on every dropdown selection instead of the no-op this interaction is.
+func TestEstimateSelectDoesNotTouchStore(t *testing.T) {
+	h := New(&fakeSlack{}, &fakeLinear{}, explodingStore{})
+	cb := interaction("U1", actionEstimateSelect, "")
+	if err := h.HandleInteraction(context.Background(), cb); err != nil {
+		t.Fatalf("estimate_select should be a no-op, got %v", err)
+	}
+}
+
 // --- helpers ---
 
 func seed(t *testing.T, repo store.SessionRepository, sess *store.PokerSession) {
