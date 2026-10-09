@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 
-HOST="127.0.0.1"
+# "localhost", not "127.0.0.1": on at least one dev machine (macOS), the
+# Firestore client's gRPC connection hangs indefinitely against the literal
+# IP but connects instantly against the hostname. CI (Linux) works fine with
+# either, so this is a local-only quirk, not a correctness issue — but it's
+# the kind of thing worth never debugging twice.
+HOST="localhost"
 PORT="8219"
 EMULATOR_HOST="${HOST}:${PORT}"
 PID_FILE="/tmp/chipin-firestore-emulator.pid"
@@ -12,8 +17,16 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	exit 1
 fi
 
+# healthy does an actual HTTP round-trip rather than just checking the port
+# accepts TCP connections: a wedged emulator process can keep its listening
+# socket accepting at the kernel level long after the JVM itself has stopped
+# responding, which a bare `nc -z` port check can't tell apart from healthy.
+healthy() {
+	curl -s -o /dev/null -m 2 "http://${EMULATOR_HOST}/"
+}
+
 start() {
-	if nc -z "$HOST" "$PORT" >/dev/null 2>&1; then
+	if healthy; then
 		export FIRESTORE_EMULATOR_HOST="$EMULATOR_HOST"
 		printf 'Firestore emulator already running on %s\n' "$FIRESTORE_EMULATOR_HOST"
 		return 0
