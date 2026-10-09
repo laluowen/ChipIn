@@ -57,7 +57,7 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	t.Cleanup(func() { repo.Close() })
+	t.Cleanup(func() { _ = repo.Close() })
 	h := handler.New(fakeSlack{}, fakeLinear{}, repo)
 	logger := log.New(testWriter{t}, "", 0)
 	return New(h, testSigningSecret, logger)
@@ -77,7 +77,7 @@ func (w testWriter) Write(p []byte) (int, error) {
 func sign(secret string, body []byte) http.Header {
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	mac := hmac.New(sha256.New, []byte(secret))
-	fmt.Fprintf(mac, "v0:%s:", ts)
+	_, _ = fmt.Fprintf(mac, "v0:%s:", ts)
 	mac.Write(body)
 	h := http.Header{}
 	h.Set("X-Slack-Request-Timestamp", ts)

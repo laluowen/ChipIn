@@ -190,7 +190,7 @@ func (c *Client) do(ctx context.Context, query string, vars map[string]any, out 
 	if err != nil {
 		return fmt.Errorf("linear request: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	var envelope struct {
 		Data   json.RawMessage `json:"data"`

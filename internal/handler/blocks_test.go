@@ -12,8 +12,8 @@ import (
 func TestHeaderLinksToLinearIssue(t *testing.T) {
 	h := &PokerHandler{}
 	sess := &store.PokerSession{
-		Identifier: "ENG-1", Title: "Do the thing",
-		IssueURL: "https://linear.app/acme/issue/ENG-1/do-the-thing",
+		Identifier: testIdentifier, Title: testIssueTitle,
+		IssueURL: testIssueURL,
 		Scale:    fibScale(),
 	}
 
@@ -24,9 +24,9 @@ func TestHeaderLinksToLinearIssue(t *testing.T) {
 
 func TestHeaderFallsBackWithoutIssueURL(t *testing.T) {
 	h := &PokerHandler{}
-	sess := &store.PokerSession{Identifier: "ENG-1", Title: "Do the thing", Scale: fibScale()}
+	sess := &store.PokerSession{Identifier: testIdentifier, Title: testIssueTitle, Scale: fibScale()}
 
-	if !blocksContain(t, h.votingBlocks(sess), "ENG-1") {
+	if !blocksContain(t, h.votingBlocks(sess), testIdentifier) {
 		t.Errorf("expected the plain identifier to still appear")
 	}
 	if blocksContain(t, h.votingBlocks(sess), "<|ENG-1>") {
@@ -37,7 +37,7 @@ func TestHeaderFallsBackWithoutIssueURL(t *testing.T) {
 func TestHeaderAttributesRequester(t *testing.T) {
 	h := &PokerHandler{}
 	sess := &store.PokerSession{
-		Identifier: "ENG-1", Title: "Do the thing", RequestedBy: "U123", Scale: fibScale(),
+		Identifier: testIdentifier, Title: testIssueTitle, RequestedBy: "U123", Scale: fibScale(),
 	}
 
 	if !blocksContain(t, h.votingBlocks(sess), "Started by <@U123>") {
@@ -47,7 +47,7 @@ func TestHeaderAttributesRequester(t *testing.T) {
 
 func TestHeaderOmitsAttributionWithoutRequester(t *testing.T) {
 	h := &PokerHandler{}
-	sess := &store.PokerSession{Identifier: "ENG-1", Title: "Do the thing", Scale: fibScale()}
+	sess := &store.PokerSession{Identifier: testIdentifier, Title: testIssueTitle, Scale: fibScale()}
 
 	if blocksContain(t, h.votingBlocks(sess), "Started by") {
 		t.Errorf("should not render an attribution line when RequestedBy is unset")

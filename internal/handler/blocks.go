@@ -58,7 +58,7 @@ func (h *PokerHandler) votingBlocks(sess *store.PokerSession) []slack.Block {
 	blocks = append(blocks, slack.NewContextBlock("", markdown(status)))
 
 	// One vote button per scale point, chunked into rows of five.
-	var elems []slack.BlockElement
+	elems := make([]slack.BlockElement, 0, len(sess.Scale))
 	for _, p := range sess.Scale {
 		btn := slack.NewButtonBlockElement(actionVotePrefix+p.Label, sess.IssueID, plainText(p.Label))
 		elems = append(elems, btn)

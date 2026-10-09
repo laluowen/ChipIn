@@ -29,13 +29,17 @@ CREATE TABLE IF NOT EXISTS sessions (
 	requested_by TEXT NOT NULL DEFAULT ''
 );`
 
+// textDefaultEmpty is the column definition shared by every migrated TEXT
+// column that defaults to an empty string.
+const textDefaultEmpty = "TEXT NOT NULL DEFAULT ''"
+
 // migratedColumns lists columns added after the table's initial creation,
 // each with the default to backfill on existing rows.
 var migratedColumns = map[string]string{
 	"scale":        "TEXT NOT NULL DEFAULT '[]'",
-	"issue_url":    "TEXT NOT NULL DEFAULT ''",
-	"message_link": "TEXT NOT NULL DEFAULT ''",
-	"requested_by": "TEXT NOT NULL DEFAULT ''",
+	"issue_url":    textDefaultEmpty,
+	"message_link": textDefaultEmpty,
+	"requested_by": textDefaultEmpty,
 }
 
 // obsoleteColumns lists columns from a since-abandoned design (a DM-based
@@ -56,11 +60,11 @@ func NewSQLite(path string) (*SQLite, error) {
 	// a single connection keeps writes ordered and avoids "database is locked".
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 	if err := migrate(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 	return &SQLite{db: db}, nil
@@ -76,6 +80,8 @@ func migrate(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("inspect sessions table: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
+
 	existing := map[string]bool{}
 	for rows.Next() {
 		var cid int
@@ -83,16 +89,13 @@ func migrate(db *sql.DB) error {
 		var notNull, pk int
 		var dflt sql.NullString
 		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
-			rows.Close()
 			return fmt.Errorf("scan table_info: %w", err)
 		}
 		existing[name] = true
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return fmt.Errorf("read table_info: %w", err)
 	}
-	rows.Close()
 
 	for col, def := range migratedColumns {
 		if existing[col] {

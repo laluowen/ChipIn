@@ -9,13 +9,15 @@ import (
 	"github.com/laluowen/ChipIn/internal/poker"
 )
 
+const testIssueUUID = "uuid-1"
+
 func newTestStore(t *testing.T) *SQLite {
 	t.Helper()
 	s, err := NewSQLite(":memory:")
 	if err != nil {
 		t.Fatalf("NewSQLite: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
@@ -32,7 +34,7 @@ func TestSaveAndGetRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	want := &PokerSession{
-		IssueID:     "uuid-1",
+		IssueID:     testIssueUUID,
 		Identifier:  "ENG-123",
 		Title:       "Make it faster",
 		IssueURL:    "https://linear.app/acme/issue/ENG-123",
@@ -48,7 +50,7 @@ func TestSaveAndGetRoundTrip(t *testing.T) {
 		t.Fatalf("SaveSession: %v", err)
 	}
 
-	got, err := s.GetSession(ctx, "uuid-1")
+	got, err := s.GetSession(ctx, testIssueUUID)
 	if err != nil {
 		t.Fatalf("GetSession: %v", err)
 	}
@@ -70,7 +72,7 @@ func TestSaveUpserts(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	sess := &PokerSession{IssueID: "uuid-1", Identifier: "ENG-1", Status: StatusVoting}
+	sess := &PokerSession{IssueID: testIssueUUID, Identifier: "ENG-1", Status: StatusVoting}
 	if err := s.SaveSession(ctx, sess); err != nil {
 		t.Fatalf("first save: %v", err)
 	}
@@ -80,7 +82,7 @@ func TestSaveUpserts(t *testing.T) {
 		t.Fatalf("second save: %v", err)
 	}
 
-	got, err := s.GetSession(ctx, "uuid-1")
+	got, err := s.GetSession(ctx, testIssueUUID)
 	if err != nil {
 		t.Fatalf("GetSession: %v", err)
 	}
@@ -93,18 +95,18 @@ func TestDelete(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	sess := &PokerSession{IssueID: "uuid-1", Identifier: "ENG-1", Status: StatusVoting}
+	sess := &PokerSession{IssueID: testIssueUUID, Identifier: "ENG-1", Status: StatusVoting}
 	if err := s.SaveSession(ctx, sess); err != nil {
 		t.Fatalf("SaveSession: %v", err)
 	}
-	if err := s.DeleteSession(ctx, "uuid-1"); err != nil {
+	if err := s.DeleteSession(ctx, testIssueUUID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
-	if _, err := s.GetSession(ctx, "uuid-1"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.GetSession(ctx, testIssueUUID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("after delete err = %v, want ErrNotFound", err)
 	}
 	// Deleting again is a no-op.
-	if err := s.DeleteSession(ctx, "uuid-1"); err != nil {
+	if err := s.DeleteSession(ctx, testIssueUUID); err != nil {
 		t.Errorf("second delete: %v", err)
 	}
 }
@@ -137,7 +139,7 @@ func TestMigrateAddsScaleColumn(t *testing.T) {
 	if _, err := raw.Exec(
 		`INSERT INTO sessions (issue_id, identifier, title, status, channel_id, message_ts, votes)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"uuid-1", "ENG-1", "Legacy issue", StatusVoting, "C1", "ts1", `{"u1":"5"}`); err != nil {
+		testIssueUUID, "ENG-1", "Legacy issue", StatusVoting, "C1", "ts1", `{"u1":"5"}`); err != nil {
 		t.Fatalf("insert legacy row: %v", err)
 	}
 	if err := raw.Close(); err != nil {
@@ -148,11 +150,11 @@ func TestMigrateAddsScaleColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLite on legacy db: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := context.Background()
 
 	// The pre-existing row should now be readable, with an empty scale.
-	got, err := s.GetSession(ctx, "uuid-1")
+	got, err := s.GetSession(ctx, testIssueUUID)
 	if err != nil {
 		t.Fatalf("GetSession on legacy row: %v", err)
 	}
@@ -207,7 +209,7 @@ func TestMigrateDropsObsoleteNoticesColumn(t *testing.T) {
 		`INSERT INTO sessions
 			(issue_id, identifier, title, status, channel_id, message_ts, votes, scale, notices, issue_url, message_link)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"uuid-1", "ENG-1", "Old issue", StatusVoting, "C1", "ts1", `{"u1":"5"}`, `[]`,
+		testIssueUUID, "ENG-1", "Old issue", StatusVoting, "C1", "ts1", `{"u1":"5"}`, `[]`,
 		`{"u1":{"channel_id":"D1","message_ts":"dm-ts-1"}}`,
 		"https://linear.app/acme/issue/ENG-1", "https://workspace.slack.com/archives/C1/pts1"); err != nil {
 		t.Fatalf("insert dm-era row: %v", err)
@@ -220,13 +222,13 @@ func TestMigrateDropsObsoleteNoticesColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLite on dm-era db: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	rows, err := s.db.Query(`PRAGMA table_info(sessions)`)
 	if err != nil {
 		t.Fatalf("table_info: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var cid int
 		var name, colType string
@@ -241,7 +243,7 @@ func TestMigrateDropsObsoleteNoticesColumn(t *testing.T) {
 	}
 
 	// Unrelated data on the row must survive the column drop.
-	got, err := s.GetSession(context.Background(), "uuid-1")
+	got, err := s.GetSession(context.Background(), testIssueUUID)
 	if err != nil {
 		t.Fatalf("GetSession after dropping notices: %v", err)
 	}

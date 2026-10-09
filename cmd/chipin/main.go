@@ -60,7 +60,7 @@ func runSocket(cfg *config.Config, logger *log.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	slackClient := slack.New(cfg.SlackBotToken, slack.OptionAppLevelToken(cfg.SlackAppToken))
 	linearClient := linear.New(cfg.LinearAPIKey)
@@ -71,7 +71,7 @@ func runSocket(cfg *config.Config, logger *log.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
+	if err := runner.Run(ctx); ctx.Err() == nil {
 		return err
 	}
 	logger.Println("shutting down")
@@ -88,7 +88,7 @@ func runWebhook(cfg *config.Config, logger *log.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	slackClient := slack.New(cfg.SlackBotToken)
 	linearClient := linear.New(cfg.LinearAPIKey)

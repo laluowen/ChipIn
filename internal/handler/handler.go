@@ -174,7 +174,7 @@ func (h *PokerHandler) HandleInteraction(ctx context.Context, cb slack.Interacti
 		point, ok := h.chosenEstimate(cb, sess)
 		if !ok {
 			// Nothing to estimate (no votes and no selection); leave it open.
-			return h.render(ctx, sess)
+			return h.render(sess)
 		}
 		return h.finalize(ctx, sess, point)
 
@@ -235,11 +235,11 @@ func (h *PokerHandler) saveAndRender(ctx context.Context, sess *store.PokerSessi
 	if err := h.Store.SaveSession(ctx, sess); err != nil {
 		return fmt.Errorf("save session: %w", err)
 	}
-	return h.render(ctx, sess)
+	return h.render(sess)
 }
 
 // render refreshes the Slack message for the session's current status.
-func (h *PokerHandler) render(ctx context.Context, sess *store.PokerSession) error {
+func (h *PokerHandler) render(sess *store.PokerSession) error {
 	var blocks []slack.Block
 	if sess.Status == store.StatusRevealed {
 		blocks = h.summaryBlocks(sess)

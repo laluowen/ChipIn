@@ -60,7 +60,9 @@ func (r *Runner) dispatch(ctx context.Context, evt socketmode.Event) {
 		if !ok {
 			return
 		}
-		r.sm.Ack(*evt.Request)
+		if err := r.sm.Ack(*evt.Request); err != nil {
+			r.log.Printf("ack slash command: %v", err)
+		}
 		if err := r.handler.HandleSlashCommand(ctx, cmd); err != nil {
 			r.log.Printf("slash command error: %v", err)
 		}
@@ -70,7 +72,9 @@ func (r *Runner) dispatch(ctx context.Context, evt socketmode.Event) {
 		if !ok {
 			return
 		}
-		r.sm.Ack(*evt.Request)
+		if err := r.sm.Ack(*evt.Request); err != nil {
+			r.log.Printf("ack interaction: %v", err)
+		}
 		if err := r.handler.HandleInteraction(ctx, cb); err != nil {
 			r.log.Printf("interaction error: %v", err)
 		}

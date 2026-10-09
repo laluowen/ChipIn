@@ -22,7 +22,7 @@ func newTestFirestore(t *testing.T) *Firestore {
 	if err != nil {
 		t.Fatalf("NewFirestore: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
@@ -51,7 +51,7 @@ func TestFirestoreSaveAndGetRoundTrip(t *testing.T) {
 		Votes:       map[string]string{"u1": "5", "u2": "8"},
 		Scale:       poker.Scale{{Label: "1", Value: 1}, {Label: "M", Value: 3}},
 	}
-	t.Cleanup(func() { s.DeleteSession(ctx, want.IssueID) })
+	t.Cleanup(func() { _ = s.DeleteSession(ctx, want.IssueID) })
 
 	if err := s.SaveSession(ctx, want); err != nil {
 		t.Fatalf("SaveSession: %v", err)
