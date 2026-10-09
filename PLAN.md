@@ -297,12 +297,16 @@ this up:
      Release, and generated `CHANGELOG.md`.
   2. GoReleaser then attaches artifacts to that same release (`release.mode:
      keep-existing` — it doesn't touch release-please's notes): static
-     `CGO_ENABLED=0` binaries for linux/darwin/windows × amd64/arm64 as archives +
-     `checksums.txt`, and a multi-arch (`linux/amd64` + `linux/arm64`) container
-     image pushed to `ghcr.io/laluowen/chipin`. Because the Go binaries are
-     cross-compiled ahead of time, the image build needs no QEMU-emulated compiler —
-     only `docker buildx` assembling trivial per-arch COPY layers (QEMU is still set
-     up in CI for the arm64 manifest itself).
+     `CGO_ENABLED=0` binaries for linux/darwin/windows × amd64/arm64, uploaded as raw
+     executables (`archives: formats: [binary]`, named `chipin_<os>_<arch>` — no
+     version in the filename, no tarball/zip wrapper; a single static binary doesn't
+     need one, and the version-free name is friendlier to tools like `mise`/aqua that
+     resolve a fixed filename per release tag) plus `checksums.txt`, and a multi-arch
+     (`linux/amd64` + `linux/arm64`) container image pushed to
+     `ghcr.io/laluowen/chipin`. Because the Go binaries are cross-compiled ahead of
+     time, the image build needs no QEMU-emulated compiler — only `docker buildx`
+     assembling trivial per-arch COPY layers (QEMU is still set up in CI for the
+     arm64 manifest itself).
 - Every action in both workflows is pinned by commit SHA with a version comment
   (`uses: owner/repo@<sha> # vX.Y.Z`); Renovate's `config:best-practices` preset
   (`helpers:pinGitHubActionDigests`) keeps them updated.

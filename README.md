@@ -46,9 +46,11 @@ a release. A release publishes:
   ghcr.io/laluowen/chipin:latest
   ```
 
-- Standalone binaries for Linux, macOS, and Windows (amd64 + arm64 each) as tarballs/zips
-  attached to the [GitHub Release](https://github.com/laluowen/ChipIn/releases), with a
-  `checksums.txt`.
+- Standalone binaries for Linux, macOS, and Windows (amd64 + arm64 each), named
+  `chipin_<os>_<arch>` (`.exe` on Windows, no version in the filename — it's already in the
+  release tag) and attached directly to the
+  [GitHub Release](https://github.com/laluowen/ChipIn/releases) as raw executables, no
+  tarball/zip wrapper, plus a `checksums.txt`.
 
 Both are built by [GoReleaser](https://goreleaser.com) from `.goreleaser.yaml`. See
 `.github/workflows/release.yml` for the exact pipeline, and `PLAN.md` §7 for the

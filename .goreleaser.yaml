@@ -22,10 +22,8 @@ builds:
     # matches cmd/chipin/main.go's `var version` — no override needed here.
 
 archives:
-  - formats: ["tar.gz"]
-    format_overrides:
-      - goos: windows
-        formats: ["zip"]
+  - formats: ["binary"]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: "checksums.txt"
