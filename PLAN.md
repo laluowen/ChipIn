@@ -280,12 +280,29 @@ this up:
   to update later, so no new session field is needed (unlike `IssueURL` and
   `MessageLink`, which are read again on every re-render/notice).
 
-## 7. Build, Release & CI (planned)
+## 7. Build, Release & CI (implemented)
 
-- **Toolchain** pinned via `mise` (`mise.toml`): Go + `golangci-lint`.
-- **Lint** with golangci-lint v2 (`.golangci.yaml`: gofumpt/gci formatters +
-  errcheck/govet/staticcheck/gosec/revive/…).
-- **Release** a static `CGO_ENABLED=0` binary + distroless image via GoReleaser.
-  Because SQLite is pure-Go, Linux/arm64+amd64 cross-compiles need no C toolchain.
-- **CI on GitHub Actions** (free hosted runners): `go test ./...` on PRs; tag →
-  GoReleaser release. (Not built yet — local testing first, per project scope.)
+- **Toolchain** pinned via `mise` (`mise.toml`): Go, `golangci-lint`, GoReleaser, and
+  the `gcloud` CLI (+ Firestore emulator component).
+- **CI** (`.github/workflows/ci.yml`), on every PR and push to `main`: `golangci-lint`
+  (v2, `.golangci.yaml`: gofumpt/gci formatters + errcheck/govet/staticcheck/gosec/
+  revive/…) and `go test ./...` against a real Firestore emulator (started in-job via
+  `google-github-actions/setup-gcloud`'s `cloud-firestore-emulator` component).
+- **Release** (`.github/workflows/release.yml` + `.goreleaser.yaml`), gated on CI
+  passing on `main`:
+  1. [release-please](https://github.com/googleapis/release-please) maintains a
+     standing "release PR" from Conventional Commits since the last release (`fix:`
+     → patch, `feat:` → minor, `!`/`BREAKING CHANGE:` → major; `chore:`/`docs:`/`ci:`
+     -only changes get no PR). Merging that PR is what cuts a release — tag, GitHub
+     Release, and generated `CHANGELOG.md`.
+  2. GoReleaser then attaches artifacts to that same release (`release.mode:
+     keep-existing` — it doesn't touch release-please's notes): static
+     `CGO_ENABLED=0` binaries for linux/darwin/windows × amd64/arm64 as archives +
+     `checksums.txt`, and a multi-arch (`linux/amd64` + `linux/arm64`) container
+     image pushed to `ghcr.io/laluowen/chipin`. Because the Go binaries are
+     cross-compiled ahead of time, the image build needs no QEMU-emulated compiler —
+     only `docker buildx` assembling trivial per-arch COPY layers (QEMU is still set
+     up in CI for the arm64 manifest itself).
+- Every action in both workflows is pinned by commit SHA with a version comment
+  (`uses: owner/repo@<sha> # vX.Y.Z`); Renovate's `config:best-practices` preset
+  (`helpers:pinGitHubActionDigests`) keeps them updated.

@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0
+        with:
+          version: v2.13.2
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # The Firestore emulator is a JVM app; the standard ubuntu-latest image
+      # doesn't guarantee a `java` on PATH, so pin one explicitly rather than
+      # rely on whatever happens to be preinstalled.
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: corretto
+          java-version: "25"
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          install_components: cloud-firestore-emulator
+
+      # Started on a fixed host:port (same convention as ./firestore.sh for
+      # local dev) so FIRESTORE_EMULATOR_HOST in the test step always points
+      # at something real. internal/store's Firestore tests skip themselves
+      # when this var is unset, but here it must be set *and* correct.
+      - name: Start Firestore emulator
+        run: |
+          gcloud emulators firestore start --host-port=127.0.0.1:8219 \
+            > /tmp/firestore-emulator.log 2>&1 &
+          timeout 30 bash -c 'until echo > /dev/tcp/127.0.0.1/8219; do sleep 1; done'
+
+      - name: go test ./...
+        run: go test ./...
+        env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8219
+
+      - name: Firestore emulator log
+        if: failure()
+        run: cat /tmp/firestore-emulator.log

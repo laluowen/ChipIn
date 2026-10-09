@@ -1,0 +1,82 @@
+name: Release
+
+# Fires once CI finishes on main — i.e. after a PR merges — not on every push,
+# so a release PR can never be opened/updated, nor a release cut, from a
+# commit that hasn't passed go test/lint. PR branches don't match
+# `branches: [main]` here (that filters on the completed workflow's branch,
+# not any branch it touched), so this stays dormant until something actually
+# lands on main — including the release PR's own merge commit, which is what
+# actually cuts a release (see release-please's PR-based flow below).
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write # open/update the release PR, create the tag + GitHub Release
+  issues: write # release-please: label and comment on related issues
+  pull-requests: write # release-please: open/update the release PR
+  packages: write # push the image to ghcr.io
+
+jobs:
+  release-please:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      # Maintains a standing "chore(main): release X.Y.Z" PR summarizing
+      # every Conventional Commit merged since the last release (feat: ->
+      # minor, fix: -> patch, "!"/"BREAKING CHANGE:" -> major; chore:/docs:/
+      # ci:-only changes get no PR at all). Merging that PR is what actually
+      # tags + publishes the release — so this step is a no-op push-button
+      # on every other merge, and does the real work only on that one.
+      - name: release-please
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          release-type: go
+
+  goreleaser:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # release-please pushed this tag via the GitHub API moments ago;
+          # checking it out explicitly (rather than the default branch tip)
+          # is what gives GoReleaser `{{ .Tag }}`/`{{ .Version }}` to build.
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # QEMU + a container buildx driver are what let a single amd64 runner
+      # assemble the linux/arm64 half of the image too (see .goreleaser.yaml's
+      # dockers_v2.platforms). No Go code actually runs emulated — GoReleaser
+      # cross-compiles both binaries natively first; buildx is only COPYing
+      # the right one into each per-arch image layer.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Cross-compiles binaries for linux/darwin/windows x amd64/arm64 (see
+      # `builds` in .goreleaser.yaml), archives + checksums them onto the
+      # GitHub Release release-please just created, and builds/pushes the
+      # linux/amd64+arm64 ghcr.io image. `release.mode: keep-existing` means
+      # it attaches to that release rather than fighting it over the notes.
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

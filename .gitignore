@@ -38,3 +38,6 @@ go.work.sum
 
 # Built binary
 chipin
+
+# GoReleaser local output (goreleaser release --snapshot --clean)
+dist/

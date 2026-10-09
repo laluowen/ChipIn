@@ -1,4 +1,12 @@
 [tools]
-"core:go" = "1.27.1"
-"core:java" = "corretto-25.0.4.10.1"
-"github:golangci/golangci-lint" = "2.13.2"
+[tools."aqua:goreleaser/goreleaser"]
+version = "2.18.2"
+[tools."aqua:twistedpair/google-cloud-sdk"]
+version = "562.0.0"
+postinstall = "gcloud components install cloud-firestore-emulator --quiet"
+[tools."core:go"]
+version = "1.27.1"
+[tools."core:java"]
+version = "corretto-25.0.4.10.1"
+[tools."github:golangci/golangci-lint"]
+version = "2.13.2"

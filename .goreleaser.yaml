@@ -1,0 +1,57 @@
+version: 2
+
+project_name: chipin
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/chipin
+    binary: chipin
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Default ldflags already set "-s -w -X main.version={{.Version}}", which
+    # matches cmd/chipin/main.go's `var version` — no override needed here.
+
+archives:
+  - formats: ["tar.gz"]
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
+
+checksum:
+  name_template: "checksums.txt"
+
+# release-please (see .github/workflows/release.yml) already created the
+# GitHub Release with its own generated notes before this runs; GoReleaser's
+# job here is only to attach binaries/images to it, not to write its own
+# changelog or overwrite that body (mode: keep-existing is the default, but
+# named here for clarity).
+changelog:
+  disable: true
+
+release:
+  mode: keep-existing
+
+# Builds a multi-arch (linux/amd64 + linux/arm64) image per the Dockerfile at
+# the repo root, which just COPYs the prebuilt static binary — GoReleaser
+# builds the Go binaries itself (see `builds` above), so the Dockerfile must
+# not also run `go build`, or you're compiling twice. See
+# https://goreleaser.com/customization/package/dockers_v2/
+dockers_v2:
+  - images:
+      - ghcr.io/laluowen/chipin
+    tags:
+      - "{{ .Tag }}"
+      - "latest"
+    platforms:
+      - linux/amd64
+      - linux/arm64

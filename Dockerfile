@@ -1,16 +1,16 @@
-FROM docker.io/library/golang:1.27.1@sha256:1e93e00a31255c07e9a34c4207f3006e1501730c5323697cee7dfb827fdae44c AS builder
-ARG VERSION=dev
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
-COPY . .
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /app/bin/chipin ./cmd/chipin
-
+# Built from GoReleaser's prebuilt binaries (see .goreleaser.yaml's `builds`
+# and `dockers_v2` sections) — this Dockerfile does NOT run `go build`, since
+# that would compile the binary a second time, once per target platform, on
+# top of GoReleaser already having done it. For a plain `docker build .`
+# without GoReleaser (e.g. quick local testing), build the binary yourself
+# first: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o linux/amd64/chipin
+# ./cmd/chipin, then `docker build --build-context .=.` from here — or just
+# run `goreleaser release --snapshot --clean`, which does both steps for
+# every supported platform.
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:2293b36c7c9082bf4115aab724b4d2cddec82c8eba39bf27ac0517e159acf150
+ARG TARGETPLATFORM
 WORKDIR /app
-COPY --from=builder /app/bin/chipin /app/chipin
+COPY $TARGETPLATFORM/chipin /app/chipin
 EXPOSE 8080
 USER nonroot:nonroot
 CMD ["/app/chipin"]
