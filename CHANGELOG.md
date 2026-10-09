@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/laluowen/ChipIn/compare/v1.0.0...v1.0.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* upload raw binaries instead of tar.gz/zip archives ([e0b9331](https://github.com/laluowen/ChipIn/commit/e0b93318322e013513d5bf3932023c07966eccf5))
+
 ## 1.0.0 (2026-10-09)
 
 
