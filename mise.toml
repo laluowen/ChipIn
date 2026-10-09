@@ -9,4 +9,4 @@ version = "1.27.1"
 [tools."core:java"]
 version = "corretto-25.0.4.10.1"
 [tools."github:golangci/golangci-lint"]
-version = "2.13.2"
+version = "2.14.0"
