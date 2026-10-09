@@ -2,6 +2,18 @@ name: CI
 
 on:
   pull_request:
+    # Only run when something that can actually affect `go test`/
+    # golangci-lint changed. Deliberately NOT applied to the `push` trigger
+    # below: the release-please PR (see release.yml) only ever touches
+    # CHANGELOG.md, and Release only fires via workflow_run after *this*
+    # workflow completes on main — path-filtering push here would mean
+    # merging that PR never triggers a release.
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".golangci.yaml"
+      - ".github/workflows/ci.yml"
   push:
     branches: [main]
 
