@@ -1,6 +1,6 @@
 [tools]
 [tools."aqua:goreleaser/goreleaser"]
-version = "2.18.2"
+version = "2.18.3"
 [tools."aqua:twistedpair/google-cloud-sdk"]
 version = "562.0.0"
 postinstall = "gcloud components install cloud-firestore-emulator --quiet"
