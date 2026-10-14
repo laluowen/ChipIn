@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	cloud.google.com/go/firestore v1.26.0
-	github.com/slack-go/slack v0.29.0
+	github.com/slack-go/slack v0.30.1
 	google.golang.org/grpc v1.83.2
 	modernc.org/sqlite v1.59.0
 )
