@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.2](https://github.com/laluowen/ChipIn/compare/v1.0.1...v1.0.2) (2026-10-14)
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/slack-go/slack to v0.30.1 ([515f7c3](https://github.com/laluowen/ChipIn/commit/515f7c31a29f13119607a743578e605d41e1df11))
+* **deps:** update module google.golang.org/grpc to v1.84.0 ([d8f1cd3](https://github.com/laluowen/ChipIn/commit/d8f1cd39fae23f979164ead74e22b0c9fd162d63))
+* **deps:** update module google.golang.org/grpc to v1.84.0 ([3f20f7b](https://github.com/laluowen/ChipIn/commit/3f20f7bf127f440adb466795fc2819e25dd418ba))
+* **deps:** update module modernc.org/sqlite to v1.60.1 ([4b9de45](https://github.com/laluowen/ChipIn/commit/4b9de4500bf032901293df176859ef3233173e31))
+
 ## [1.0.1](https://github.com/laluowen/ChipIn/compare/v1.0.0...v1.0.1) (2026-10-09)
 
 
