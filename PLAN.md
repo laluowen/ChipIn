@@ -204,37 +204,62 @@ respectively. Socket Mode must be *disabled* for this mode (Slack treats
 Socket Mode and HTTP request URLs as mutually exclusive per app). A `GET
 /healthz` endpoint is included for Cloud Run's startup/liveness probes.
 
-## 5. Linear OAuth App (planned)
+## 5. Linear OAuth App
 
-The proof-of-concept authenticates to Linear with a single **personal API key**
-(`LINEAR_API_KEY`), sent as-is in the `Authorization` header. This is fine for one
-user/workspace but does not scale to distributing ChipIn as an installable app.
+ChipIn supports three ways to authenticate to Linear, all behind the same
+`linear.TokenSource` interface (`internal/linear/oauth.go`) so `handler.LinearAPI`
+never needs to know which one is active:
 
-The intended end state is a full **Linear OAuth 2.0 application** so each workspace
-grants its own scoped access:
+- **Personal API key** (`LINEAR_API_KEY`) — implemented from the start. Sent
+  as-is in the `Authorization` header (`staticToken`, no refresh, no expiry).
+  Still the zero-config path for local/dev.
+- **OAuth2 client_credentials** (`LINEAR_CLIENT_ID` + `LINEAR_CLIENT_SECRET`) —
+  **implemented.** Chosen over the authorization_code flow as the primary OAuth
+  path because it needs no redirect/callback endpoint, no persisted refresh
+  token, and works identically in both Mode A and Mode B — client_credentials
+  is exactly the grant Linear's own docs recommend for "a user-initiated OAuth
+  flow involving refresh tokens" being impractical, which describes a
+  long-running headless service like ChipIn. `ClientCredentialsTokenSource`
+  mints an access token good for ~30 days, caches it in memory, and refetches
+  it when within 5 minutes of expiry or after a 401 (`Client.do` retries once).
+  **Caveat:** tokens from this grant only see the workspace's *public* Linear
+  teams — not private ones.
+- **Authorization code + refresh token** (planned) — needed only for private
+  Linear teams, since that's the one thing client_credentials can't reach.
+  Requires a public HTTPS callback, so it only makes sense in Mode B: redirect
+  an admin to `https://linear.app/oauth/authorize` (`response_type=code`,
+  `scope=read,write`, a CSRF `state`), exchange the returned `code` at
+  `https://api.linear.app/oauth/token`, then persist the access + refresh
+  token pair — Linear **rotates the refresh token on every use**, so the new
+  one must be re-saved each time or the chain breaks. Access tokens last 24h.
+  Slots into the existing `TokenSource` interface without touching `Client`
+  again; the only new work is the HTTP install/callback pair and the token
+  store. Not yet built — nothing in this codebase has a per-workspace concept
+  to key the stored token against, so building this now would mean
+  speculating about a multi-tenant shape nothing else here needs yet.
 
-- **Register** an OAuth application in Linear (`https://linear.app/settings/api`),
-  obtaining a client ID/secret and setting the redirect URI.
-- **Authorization code flow:** redirect the installer to
-  `https://linear.app/oauth/authorize` with the needed scopes (at minimum
-  `read` and `write` for reading issues and updating estimates; `issues:create`
-  is not needed), then exchange the code at `https://api.linear.app/oauth/token`.
-- **Token storage:** persist per-workspace access/refresh tokens in the store
-  (new table/collection), keyed by Linear workspace/org ID. Refresh on expiry.
-- **Auth header:** OAuth access tokens use the `Bearer <token>` prefix, unlike
-  personal keys. `linear.Client` should grow an option to select the scheme, or
-  accept a token source that yields a fresh bearer token per request.
-- **Abstraction:** introduce a `TokenSource` (per workspace) so the handler picks
-  the right Linear credentials for the workspace an interaction came from. The
-  existing `LinearAPI` interface already isolates the handler from this change.
-- **Webhook signature / state:** OAuth install + Slack "Add to workspace" pair
-  naturally with **Mode B** (HTTP webhooks); build them together.
+### Creating the Linear OAuth2 application (manual, one-time)
 
-Until then, keep the personal-key path as the zero-config local/dev mode.
+1. Go to <https://linear.app/settings/api/applications/new> and create an app.
+2. Set a redirect URI. For client_credentials this is never actually used (no
+   redirect happens), but Linear's form requires one — any placeholder
+   (e.g. `https://example.com/unused`) is fine until the authorization_code
+   flow above is built, at which point it needs to be the real callback URL.
+3. **Settings → API → your app → toggle on "Client credentials tokens".**
+   This is required — without it, the `client_credentials` grant is rejected
+   with "Client does not support the client_credentials grant type", and it's
+   not implied by just registering the app.
+4. Copy the **Client ID** and **Client Secret** → `LINEAR_CLIENT_ID` /
+   `LINEAR_CLIENT_SECRET`.
+5. Do **not** also set `LINEAR_API_KEY` — `config.Load` rejects having both a
+   personal key and client credentials configured at once (ambiguous which
+   one should win), and having only one of `LINEAR_CLIENT_ID`/`_SECRET` set
+   (required: both together).
 
 ## 6. Issue Context
 
 Every surface where a user encounters a round should carry a path back to its
+
 source, so nobody has to hunt for "which issue was this again?" or "where's the
 actual vote".
 

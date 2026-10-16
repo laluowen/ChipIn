@@ -54,6 +54,16 @@ func run() error {
 	}
 }
 
+// newLinearClient builds the Linear client for cfg's configured auth method
+// — see config.Config's doc comment on LinearAPIKey/LinearClientID for why
+// exactly one of them is set.
+func newLinearClient(cfg *config.Config) *linear.Client {
+	if cfg.UsesLinearOAuth() {
+		return linear.NewClientCredentials(cfg.LinearClientID, cfg.LinearClientSecret)
+	}
+	return linear.New(cfg.LinearAPIKey)
+}
+
 // runSocket runs Mode A: Socket Mode transport + SQLite storage.
 func runSocket(cfg *config.Config, logger *log.Logger) error {
 	repo, err := store.NewSQLite(cfg.DBPath)
@@ -63,7 +73,7 @@ func runSocket(cfg *config.Config, logger *log.Logger) error {
 	defer func() { _ = repo.Close() }()
 
 	slackClient := slack.New(cfg.SlackBotToken, slack.OptionAppLevelToken(cfg.SlackAppToken))
-	linearClient := linear.New(cfg.LinearAPIKey)
+	linearClient := newLinearClient(cfg)
 
 	h := handler.New(slackClient, linearClient, repo)
 	runner := socket.New(slackClient, h, logger)
@@ -91,7 +101,7 @@ func runWebhook(cfg *config.Config, logger *log.Logger) error {
 	defer func() { _ = repo.Close() }()
 
 	slackClient := slack.New(cfg.SlackBotToken)
-	linearClient := linear.New(cfg.LinearAPIKey)
+	linearClient := newLinearClient(cfg)
 
 	h := handler.New(slackClient, linearClient, repo)
 	srv := webhook.New(h, cfg.SlackSigningSecret, logger)

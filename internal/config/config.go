@@ -21,7 +21,16 @@ type Config struct {
 
 	// Shared by both modes.
 	SlackBotToken string // xoxb-...
-	LinearAPIKey  string // Linear personal API key
+
+	// Linear auth: exactly one of these two is required (validated in Load).
+	// Personal key is the zero-config path; client credentials is the OAuth
+	// path — see PLAN.md §5 for why client_credentials rather than
+	// authorization_code (works in both modes, no callback endpoint, no
+	// refresh token to persist). If both LinearClientID and
+	// LinearClientSecret are set, they take precedence over LinearAPIKey.
+	LinearAPIKey       string // Linear personal API key
+	LinearClientID     string // Linear OAuth2 app client ID
+	LinearClientSecret string // Linear OAuth2 app client secret
 
 	// Mode A (EnvLocal): Socket Mode + SQLite.
 	SlackAppToken string // xapp-... (Socket Mode)
@@ -34,21 +43,39 @@ type Config struct {
 	FirestoreDatabaseID string // Firestore database ID, usually "(default)"
 }
 
+// UsesLinearOAuth reports whether Linear auth is configured for the OAuth2
+// client_credentials grant (LinearClientID/LinearClientSecret) rather than a
+// personal API key.
+func (c *Config) UsesLinearOAuth() bool {
+	return c.LinearClientID != ""
+}
+
 // Load reads configuration from environment variables, returning an error
 // that names every variable missing for the selected Environment at once.
 func Load() (*Config, error) {
 	c := &Config{
-		Environment:   envOr("ENVIRONMENT", EnvLocal),
-		SlackBotToken: os.Getenv("SLACK_BOT_TOKEN"),
-		LinearAPIKey:  os.Getenv("LINEAR_API_KEY"),
+		Environment:        envOr("ENVIRONMENT", EnvLocal),
+		SlackBotToken:      os.Getenv("SLACK_BOT_TOKEN"),
+		LinearAPIKey:       os.Getenv("LINEAR_API_KEY"),
+		LinearClientID:     os.Getenv("LINEAR_CLIENT_ID"),
+		LinearClientSecret: os.Getenv("LINEAR_CLIENT_SECRET"),
 	}
 
 	var missing []string
 	if c.SlackBotToken == "" {
 		missing = append(missing, "SLACK_BOT_TOKEN")
 	}
-	if c.LinearAPIKey == "" {
-		missing = append(missing, "LINEAR_API_KEY")
+
+	hasKey := c.LinearAPIKey != ""
+	hasClientID := c.LinearClientID != ""
+	hasClientSecret := c.LinearClientSecret != ""
+	switch {
+	case hasKey && (hasClientID || hasClientSecret):
+		return nil, fmt.Errorf("specify either LINEAR_API_KEY or LINEAR_CLIENT_ID+LINEAR_CLIENT_SECRET, not both")
+	case hasClientID != hasClientSecret:
+		return nil, fmt.Errorf("LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET must both be set")
+	case !hasKey && !hasClientID:
+		missing = append(missing, "LINEAR_API_KEY (or LINEAR_CLIENT_ID+LINEAR_CLIENT_SECRET)")
 	}
 
 	switch c.Environment {

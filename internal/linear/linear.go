@@ -20,9 +20,9 @@ const DefaultEndpoint = "https://api.linear.app/graphql"
 
 // Client talks to the Linear GraphQL API.
 type Client struct {
-	token    string
-	endpoint string
-	http     *http.Client
+	tokenSource TokenSource
+	endpoint    string
+	http        *http.Client
 }
 
 // Option customises a Client.
@@ -38,14 +38,37 @@ func WithHTTPClient(h *http.Client) Option {
 	return func(c *Client) { c.http = h }
 }
 
-// New returns a Client authenticated with the given token. A personal API key
-// is sent as-is in the Authorization header, which is what Linear expects for
-// personal keys (OAuth access tokens use the "Bearer " prefix; see PLAN.md).
-func New(token string, opts ...Option) *Client {
+// New returns a Client authenticated with a personal API key, sent as-is in
+// the Authorization header (no "Bearer" prefix — that's what Linear expects
+// for personal keys; OAuth access tokens are different, see
+// NewClientCredentials).
+func New(apiKey string, opts ...Option) *Client {
+	return NewWithTokenSource(staticToken(apiKey), opts...)
+}
+
+// NewClientCredentials returns a Client authenticated via Linear's OAuth2
+// client_credentials grant: no user interaction, no redirect/callback, no
+// refresh token to persist — just a client ID/secret that mints short-lived
+// (30 day) access tokens, refetched automatically before they expire or on a
+// 401. This is the OAuth path for long-running services like ChipIn; see
+// PLAN.md §5 for why it was chosen over the authorization_code + refresh
+// token flow (which needs a public HTTP callback and only makes sense in
+// webhook mode).
+//
+// Tokens minted this way only see the workspace's *public* teams.
+func NewClientCredentials(clientID, clientSecret string, opts ...Option) *Client {
+	return NewWithTokenSource(NewClientCredentialsTokenSource(clientID, clientSecret), opts...)
+}
+
+// NewWithTokenSource returns a Client authenticated via an arbitrary
+// TokenSource. Exported so alternative grant types (e.g. a future
+// authorization_code + refresh_token TokenSource) can plug in without
+// changing Client itself.
+func NewWithTokenSource(ts TokenSource, opts ...Option) *Client {
 	c := &Client{
-		token:    token,
-		endpoint: DefaultEndpoint,
-		http:     &http.Client{Timeout: 15 * time.Second},
+		tokenSource: ts,
+		endpoint:    DefaultEndpoint,
+		http:        &http.Client{Timeout: 15 * time.Second},
 	}
 	for _, o := range opts {
 		o(c)
@@ -173,22 +196,29 @@ func parseIdentifier(identifier string) (teamKey string, number float64, err err
 }
 
 // do executes a GraphQL request and unmarshals the "data" object into out.
+// A 401 gets one retry after invalidating the token source's cached token
+// (relevant for TokenSources that mint their own short-lived tokens, like
+// ClientCredentialsTokenSource — a personal key or a 401 that survives the
+// retry just fails normally).
 func (c *Client) do(ctx context.Context, query string, vars map[string]any, out any) error {
 	body, err := json.Marshal(map[string]any{"query": query, "variables": vars})
 	if err != nil {
 		return fmt.Errorf("encode request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	res, err := c.doOnce(ctx, body)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", c.token)
-
-	res, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("linear request: %w", err)
+	if res.StatusCode == http.StatusUnauthorized {
+		_ = res.Body.Close()
+		if inv, ok := c.tokenSource.(Invalidator); ok {
+			inv.Invalidate()
+			res, err = c.doOnce(ctx, body)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	defer func() { _ = res.Body.Close() }()
 
@@ -213,4 +243,26 @@ func (c *Client) do(ctx context.Context, query string, vars map[string]any, out 
 		}
 	}
 	return nil
+}
+
+// doOnce sends a single request with a fresh Authorization header. Callers
+// are responsible for closing the returned response's Body.
+func (c *Client) doOnce(ctx context.Context, body []byte) (*http.Response, error) {
+	authHeader, err := c.tokenSource.AuthHeader(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get linear auth token: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", authHeader)
+
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("linear request: %w", err)
+	}
+	return res, nil
 }

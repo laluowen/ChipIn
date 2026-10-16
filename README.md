@@ -78,10 +78,30 @@ Where the two modes diverge is how Slack actually reaches ChipIn:
 
 The sections below cover each.
 
-## 2. Get a Linear personal API key
+## 2. Authenticate to Linear
 
-`https://linear.app/settings/api` → create a personal API key. It needs permission to
-read issues and update estimates. Both modes use this the same way.
+Two options — pick one, not both (ChipIn refuses to start if it sees both):
+
+**Personal API key** (simplest, good for local/dev): `https://linear.app/settings/api`
+→ create a personal API key → `LINEAR_API_KEY`.
+
+**OAuth2 client_credentials** (recommended beyond solo/dev use — scoped,
+revocable/rotatable independent of any one person's account):
+
+1. <https://linear.app/settings/api/applications/new> → create an app.
+2. Set a redirect URI — required by the form, but unused by this grant type; any
+   placeholder (e.g. `https://example.com/unused`) works.
+3. On the app's settings page, toggle on **"Client credentials tokens"**. Easy to
+   miss — without it you'll get `Client does not support the client_credentials
+   grant type` the first time ChipIn tries to fetch a token.
+4. Copy the **Client ID** and **Client Secret** → `LINEAR_CLIENT_ID` /
+   `LINEAR_CLIENT_SECRET` (both required together).
+
+Note: client_credentials tokens only see the workspace's *public* Linear teams. If
+your planning poker rounds live on a private team, use the personal API key for now
+(an authorization_code-based flow for private-team access is planned — see `PLAN.md` §5).
+
+Both modes use whichever you choose the same way.
 
 ## Mode A: Local / Socket Mode
 
@@ -97,7 +117,7 @@ Configure and run:
 export ENVIRONMENT=local       # optional, this is the default
 export SLACK_APP_TOKEN=xapp-...
 export SLACK_BOT_TOKEN=xoxb-...
-export LINEAR_API_KEY=lin_api_...
+export LINEAR_API_KEY=lin_api_...      # or LINEAR_CLIENT_ID + LINEAR_CLIENT_SECRET, not both
 export DB_PATH=./chipin.db     # optional, this is the default
 
 go run ./cmd/chipin
@@ -201,6 +221,11 @@ gcloud run deploy chipin \
 `--allow-unauthenticated` is required here — Slack calls this service directly and
 can't present GCP credentials. Request authenticity is instead verified per-request
 against `SLACK_SIGNING_SECRET` (see `internal/webhook`).
+
+If using Linear OAuth client_credentials instead of a personal key (§2), create
+`chipin-linear-client-id`/`chipin-linear-client-secret` secrets the same way as
+§2.5–2.6, and swap the `LINEAR_API_KEY=...` entry above for
+`LINEAR_CLIENT_ID=chipin-linear-client-id:latest,LINEAR_CLIENT_SECRET=chipin-linear-client-secret:latest`.
 
 Now go back and set the Slack Request URLs above to this service's URL.
 
