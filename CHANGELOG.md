@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/laluowen/ChipIn/compare/v1.0.2...v1.1.0) (2026-10-16)
+
+
+### Features
+
+* add Linear OAuth2 client_credentials support ([63074ad](https://github.com/laluowen/ChipIn/commit/63074ad6ee64de5cffd4208d5a7bd45702b09389))
+
 ## [1.0.2](https://github.com/laluowen/ChipIn/compare/v1.0.1...v1.0.2) (2026-10-14)
 
 
