@@ -32,6 +32,10 @@ type Config struct {
 	LinearClientID     string // Linear OAuth2 app client ID
 	LinearClientSecret string // Linear OAuth2 app client secret
 
+	// Warnings are non-fatal notes about the configuration (a value that was
+	// adjusted or should be double-checked) for the caller to log.
+	Warnings []string
+
 	// Mode A (EnvLocal): Socket Mode + SQLite.
 	SlackAppToken string // xapp-... (Socket Mode)
 	DBPath        string // SQLite file path
@@ -50,9 +54,14 @@ func (c *Config) UsesLinearOAuth() bool {
 	return c.LinearClientID != ""
 }
 
-// Load reads configuration from environment variables, returning an error
-// that names every variable missing for the selected Environment at once.
+// Load reads configuration from environment variables, falling back to a
+// ".env" file in the working directory for anything unset (real environment
+// variables always win). It returns an error that names every variable
+// missing for the selected Environment at once.
 func Load() (*Config, error) {
+	if err := loadDotEnv(".env"); err != nil {
+		return nil, err
+	}
 	c := &Config{
 		Environment:        envOr("ENVIRONMENT", EnvLocal),
 		SlackBotToken:      os.Getenv("SLACK_BOT_TOKEN"),
@@ -84,6 +93,10 @@ func Load() (*Config, error) {
 		c.SlackSigningSecret = os.Getenv("SLACK_SIGNING_SECRET")
 		c.GCPProjectID = os.Getenv("GCP_PROJECT_ID")
 		c.FirestoreDatabaseID = envOr("FIRESTORE_DATABASE_ID", "(default)")
+		if c.FirestoreDatabaseID != "(default)" {
+			c.Warnings = append(c.Warnings, fmt.Sprintf("FIRESTORE_DATABASE_ID=%q is a named database: Firestore's free quota only covers (default), so every read and write is billed",
+				c.FirestoreDatabaseID))
+		}
 		if c.SlackSigningSecret == "" {
 			missing = append(missing, "SLACK_SIGNING_SECRET")
 		}

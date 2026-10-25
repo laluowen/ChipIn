@@ -45,6 +45,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	for _, w := range cfg.Warnings {
+		logger.Println("warning:", w)
+	}
 
 	switch cfg.Environment {
 	case config.EnvGCP:

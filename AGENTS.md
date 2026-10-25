@@ -4,10 +4,9 @@
 
 Self-hosted async planning poker for Slack + Linear. A single static Go binary
 that runs in either of two modes, selected by `ENVIRONMENT` (`local` | `gcp`):
-**Mode A** — local Slack Socket Mode + SQLite + a Linear personal API key —
-and **Mode B** — Cloud Run HTTP webhooks + Firestore. Both are implemented;
-see `PLAN.md`. The Linear OAuth app (§5) and CI/release pipeline (§7) are
-still planned.
+**Mode A** — local Slack Socket Mode + a JSON data file + Linear auth — and
+**Mode B** — Cloud Run HTTP webhooks + Firestore. Both are implemented; see
+`PLAN.md`.
 
 ## Layout
 
@@ -100,6 +99,35 @@ Bot token needs: `commands`, `chat:write`. App-level token needs `connections:wr
 Enable Socket Mode, add a `/chipin` slash command, and enable Interactivity.
 (`chat.getPermalink`, used for notice context, requires no scopes at all.)
 
+## Committing (agents)
+
+This assumes the owner has a git alias `agent-commit` configured (see CONTRIBUTING.md, "AI-assisted
+commits"). Commit with it, not plain `git commit`, setting the model on every commit:
+
+```sh
+AGENT_MODEL="<provider>/<model>" git agent-commit -m "type(scope): subject"
+```
+
+`AGENT_MODEL` is the model you're actually running as (provider/model ID, as in your system
+prompt's model info). The alias takes the same arguments as `git commit`, signs with a dedicated
+agent key, and adds an `Assisted-by: OpenCode <version> (<model>)` trailer. If the alias is missing,
+don't fall back to plain `git commit` (signing may need the owner to touch a hardware key); ask.
+
+If a `gh` remote exists, fetch and push through it rather than `origin`. Only commit or push when
+asked, and open a PR instead of pushing to `main`.
+
+## Compatibility
+
+ChipIn has published releases (see `gh release list`). Treat it as having real users: a breaking
+change (an env var or default changing, `:latest` disappearing, data format changes) needs a `!`
+after the commit type or a `BREAKING CHANGE:` footer so release-please makes it a major release,
+and the docs must say what to do. Data must never be silently discarded or overwritten: migrate
+it, or refuse to start with an error that says what to do (as the JSON store does with an old
+SQLite file). Keep an old env var name working, with a warning, for at least a release when
+renaming one.
+
 ## Env vars (local)
 
-`SLACK_APP_TOKEN` (xapp-), `SLACK_BOT_TOKEN` (xoxb-), `LINEAR_API_KEY`, optional `DB_PATH`.
+`SLACK_APP_TOKEN` (xapp-), `SLACK_BOT_TOKEN` (xoxb-), `LINEAR_API_KEY` (or `LINEAR_CLIENT_ID` +
+`LINEAR_CLIENT_SECRET`), optional `DB_PATH`. See `.env.example` for the full list and Mode B's
+variables.
