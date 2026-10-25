@@ -16,7 +16,7 @@ It runs in one of two modes, same binary, picked by the `ENVIRONMENT` variable:
 
 | Mode | `ENVIRONMENT` | Transport | Storage | Suited to |
 |---|---|---|---|---|
-| **A: Socket** | `local` (default) | Outbound WebSocket (Slack Socket Mode) | SQLite file | A box you control, no public ingress needed |
+| **A: Socket** | `local` (default) | Outbound WebSocket (Slack Socket Mode) | JSON file | A box you control, no public ingress needed |
 | **B: Webhook** | `gcp` | HTTP (Slack sends requests in) | Firestore | Cloud Run, scale-to-zero |
 
 See [`PLAN.md`](./PLAN.md) for the full design and [`AGENTS.md`](./AGENTS.md) for
@@ -118,13 +118,13 @@ export ENVIRONMENT=local       # optional, this is the default
 export SLACK_APP_TOKEN=xapp-...
 export SLACK_BOT_TOKEN=xoxb-...
 export LINEAR_API_KEY=lin_api_...      # or LINEAR_CLIENT_ID + LINEAR_CLIENT_SECRET, not both
-export DB_PATH=./chipin.db     # optional, this is the default
+export DB_PATH=./chipin.json   # optional, this is the default
 
 go run ./cmd/chipin
 ```
 
 Nothing inbound is required — the process dials out to Slack over a WebSocket and
-keeps a local SQLite file for in-progress sessions.
+keeps a local JSON file for in-progress sessions.
 
 ## Mode B: GCP Cloud Run / Webhook Mode
 

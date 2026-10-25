@@ -39,7 +39,7 @@ func TestLoadSucceedsWithDefaults(t *testing.T) {
 	if c.Environment != EnvLocal {
 		t.Errorf("Environment = %q, want %q", c.Environment, EnvLocal)
 	}
-	if c.DBPath != "./chipin.db" {
+	if c.DBPath != "./chipin.json" {
 		t.Errorf("DBPath default = %q", c.DBPath)
 	}
 	if c.UsesLinearOAuth() {

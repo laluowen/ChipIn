@@ -23,7 +23,7 @@ doesn't know which mode it's running under.
 
     - **Transport:** Outbound WebSockets (`internal/socket`).
 
-    - **State:** Local SQLite database (`store.SQLite`).
+    - **State:** Local JSON data file (`store.JSONFile`).
 - **Mode B: Serverless / Cloud Run (Webhook Mode)** — `ENVIRONMENT=gcp`
 
     - **Transport:** HTTP Webhooks (`internal/webhook`), signature-verified
@@ -83,8 +83,8 @@ type SessionRepository interface {
   `"?"` card — an abstention is simply a missing vote.
 - `Scale` is derived per team from Linear's estimation settings, not hard-coded (see
   §3). A `poker.Point` is `{Label, Value}`: `Label` is what voters see, `Value` is the
-  number written to Linear. The scale is persisted (SQLite `scale` column) so buttons,
-  vote validation, and consensus all use the same points.
+  number written to Linear. The scale is persisted alongside the rest of the session
+  so buttons, vote validation, and consensus all use the same points.
 - Added `IssueURL`, `MessageLink`, and `RequestedBy` for context/attribution — see
   §6.
 - **A DM-based private-notice design (`Notices map[string]Notice`, keyed per user)
@@ -93,14 +93,44 @@ type SessionRepository interface {
   a persisted per-user `{ChannelID, MessageTS}` reference, and stale-reference
   fallback logic — too many moving parts for the win. Reverted to plain
   `chat.postEphemeral` (one new message per vote; Slack has no way to update or
-  dedupe these). The `notices` SQLite column from that design is dropped via
-  migration on databases that already have it (`DROP COLUMN`, supported since
-  SQLite 3.35).
+  dedupe these). (When local storage was still SQLite, the abandoned design's
+  `notices` column was dropped via an `ALTER TABLE ... DROP COLUMN` migration on
+  databases that already had it; `store.JSONFile` has no such column and no
+  migration path at all — see "Local storage" below.)
 - Added `Identifier`, `Title`, and `MessageTS`. `MessageTS` is required to
   `chat.update` the existing message; `Identifier`/`Title` are for display.
-- Added `Close()` so `main` can release the SQLite handle cleanly.
-- The concrete driver is **pure-Go `modernc.org/sqlite`** (`CGO_ENABLED=0`), chosen
-  so the distroless static binary cross-compiles cleanly on free GitHub runners.
+- Added `Close()` so `main` can release the store cleanly (a no-op for
+  `store.JSONFile`, since every write is already on disk by the time it returns;
+  meaningful for `store.Firestore`'s client).
+
+### Local storage: a JSON file (implemented; replaced SQLite)
+
+Firestore is the production store, so SQLite was a second data model to keep in step
+with it. `local` mode runs as one process, so it doesn't need what SQLite is for
+(transactions shared between processes), and its SQL bought nothing the Firestore
+store doesn't already do with a plain map lookup. The driver also added ~6 MB to the
+binary and ~30 `modernc.org` packages; both are gone.
+
+`JSONFile` (`internal/store/jsonfile.go`) keeps every in-progress session in memory,
+mirroring Firestore's `chipin_sessions` collection as a `map[issueID]*PokerSession`.
+`SaveSession`/`DeleteSession` build the new state on a copy of what they touch, save,
+and only then swap it into memory, so a failed save changes nothing. Saving writes a
+temp file, fsyncs it and renames it over the old one, so a crash never leaves a
+partial file. `GetSession` returns a copy (`Votes` and `Scale` are mutable), so
+neither the store nor the caller can reach into the other's memory. Rewriting the
+whole file per save is fine at this app's scale: sessions are short-lived (a session
+is deleted the moment its estimate is set or the round is cancelled), so the file
+never holds more than the currently in-progress rounds.
+
+Limits of the design: one process per file (a second would clobber the first's
+writes; there is no lock, since the portable options are worse than the failure
+they'd prevent), and the default path is `./chipin.json` (`DB_PATH`).
+
+Migration: none. Sessions are short-lived, so there was nothing worth carrying
+forward from the old SQLite store. An old SQLite file at `DB_PATH` is refused with an
+error that says so (recognised by its header) rather than silently ignored or
+overwritten. Handler and webhook tests use an in-memory `JSONFile`.
+
 
 ### 2.2 Transport Boundary (`handler.go`)
 
@@ -185,7 +215,7 @@ behind interfaces so the core stays unit-testable without live services.
 - `SLACK_APP_TOKEN` (xapp-...)
 - `SLACK_BOT_TOKEN` (xoxb-...)
 - `LINEAR_API_KEY` (Linear personal API key)
-- `DB_PATH` (optional; defaults to `./chipin.db`)
+- `DB_PATH` (optional; defaults to `./chipin.json`)
 
 ### For Cloud Run / Webhook Mode (implemented)
 

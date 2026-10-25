@@ -11,12 +11,12 @@ that runs in either of two modes, selected by `ENVIRONMENT` (`local` | `gcp`):
 ## Layout
 
 - `cmd/chipin` — entrypoint; `run()` branches on `ENVIRONMENT` into
-  `runSocket` (Mode A: config → SQLite → slack/linear clients → handler →
+  `runSocket` (Mode A: config → JSON file → slack/linear clients → handler →
   socket runner) or `runWebhook` (Mode B: config → Firestore → slack/linear
   clients → handler → webhook server).
 - `internal/poker` — pure domain logic (vote scale, consensus). No I/O. Test aggressively.
-- `internal/store` — `SessionRepository` interface + types; `SQLite` (pure-Go driver, Mode A)
-  and `Firestore` (Mode B) implementations.
+- `internal/store` — `SessionRepository` interface + types; `JSONFile` (in-memory,
+  saved atomically to one file, Mode A) and `Firestore` (Mode B) implementations.
 - `internal/linear` — minimal GraphQL client (fetch issue by identifier, set estimate).
 - `internal/handler` — transport-agnostic game logic + Block Kit builders. The core.
 - `internal/socket` — Socket Mode receive loop; adapts Slack events onto the handler.
@@ -27,28 +27,41 @@ that runs in either of two modes, selected by `ENVIRONMENT` (`local` | `gcp`):
 
 ## Testing
 
-- Run `go test ./...` after every non-trivial change. Everything except the socket
-  loop, webhook HTTP wiring smoke tests, and `main` is unit-tested.
-- `internal/store` SQLite tests use `:memory:` — no fixtures, no cleanup files.
-  Firestore tests are gated behind `FIRESTORE_EMULATOR_HOST`
-  (`gcloud emulators firestore start --host-port=localhost:8219`) and
-  auto-skip when it's unset — no live Firestore calls.
+- Run `go test -race ./...` after every non-trivial change. Everything except the
+  socket loop, webhook HTTP wiring smoke tests, and `main` is unit-tested.
+- `internal/store/store_test.go` holds one contract test run against every
+  `SessionRepository`. Any new store method gets added there. The JSON file store
+  runs in memory and on a temp file; Firestore runs only with
+  `FIRESTORE_EMULATOR_HOST` (`source ./firestore.sh start`) and skips otherwise —
+  never hit live GCP.
 - `internal/linear` tests use `httptest.Server` — no live Linear calls.
-- `internal/handler` tests use fake `SlackAPI`/`LinearAPI` + in-memory store. The
-  handler depends on narrow interfaces precisely so it stays testable without live
-  services. Keep it that way: do not import `*slack.Client` concretely into logic.
+- `internal/handler` tests use fake `SlackAPI`/`LinearAPI` + an in-memory
+  `JSONFile`. The handler depends on narrow interfaces precisely so it stays
+  testable without live services. Keep it that way: do not import
+  `*slack.Client` concretely into logic.
 - `internal/webhook` tests construct a real `handler.PokerHandler` over fakes +
-  `:memory:` SQLite, and drive it through `httptest` with hand-computed Slack
-  signatures — no live Slack calls.
+  an in-memory `JSONFile`, and drive it through `httptest` with hand-computed
+  Slack signatures — no live Slack calls.
 - There are no integration tests against live Slack/Linear yet. If added, gate them
   behind `testing.Short()` and an env var, following the opqr pattern.
 
 ## Key design decisions
 
-- **Pure-Go SQLite** (`modernc.org/sqlite`), NOT CGO. This keeps `CGO_ENABLED=0`
-  builds and a distroless static binary with zero cross-compile pain on free
-  GitHub runners. Do not switch to `mattn/go-sqlite3` — it reintroduces the CGO/zig
-  toolchain dance.
+- **Local mode is a JSON file (`JSONFile`), not a database.** Firestore is the
+  production store, so a local SQL database was a second data model to keep in
+  step with it, and `local` mode runs as one process — it doesn't need what
+  SQLite is for (transactions shared between processes). `JSONFile` keeps every
+  in-progress session in memory, mirroring the Firestore `chipin_sessions`
+  collection as a map keyed by issue ID. Saves are write-temp, fsync, rename; a
+  failed save leaves memory untouched (`SaveSession`/`DeleteSession` build the
+  new state on a copy and only swap it in once the write succeeds). One process
+  per file: there is no lock, since the portable options are worse than the
+  failure they'd prevent. `GetSession` returns a copy (the `Votes` map and
+  `Scale` slice are mutable). An old SQLite file at `DB_PATH` is refused with an
+  error that says so (recognised by its header) rather than silently ignored or
+  overwritten — there's no migration, since a session is deleted the moment its
+  estimate is set or the round is cancelled, so there's nothing worth carrying
+  forward. Dropped `modernc.org/sqlite` and ~30 packages (~6 MB off the binary).
 - **Interfaces at the boundary.** `handler.SlackAPI` and `handler.LinearAPI` are the
   minimal subsets the handler needs; the real clients satisfy them as drop-ins.
   `handler.UpdateMessage` MUST keep the 4-return signature to match `*slack.Client`.
