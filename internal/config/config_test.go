@@ -39,7 +39,7 @@ func TestLoadSucceedsWithDefaults(t *testing.T) {
 	if c.Environment != EnvLocal {
 		t.Errorf("Environment = %q, want %q", c.Environment, EnvLocal)
 	}
-	if c.DBPath != "./chipin.db" {
+	if c.DBPath != "./chipin.json" {
 		t.Errorf("DBPath default = %q", c.DBPath)
 	}
 	if c.UsesLinearOAuth() {
@@ -80,6 +80,27 @@ func TestLoadGCPSucceedsWithDefaults(t *testing.T) {
 	}
 	if c.FirestoreDatabaseID != "(default)" {
 		t.Errorf("FirestoreDatabaseID default = %q", c.FirestoreDatabaseID)
+	}
+	if len(c.Warnings) != 0 {
+		t.Errorf("Warnings = %v, want none for the (default) database", c.Warnings)
+	}
+}
+
+func TestLoadWarnsOnNamedFirestoreDatabase(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "gcp")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-1")
+	clearLinearEnv(t)
+	t.Setenv("LINEAR_API_KEY", "lin_key")
+	t.Setenv("SLACK_SIGNING_SECRET", "shhh")
+	t.Setenv("GCP_PROJECT_ID", "my-project")
+	t.Setenv("FIRESTORE_DATABASE_ID", "chipin")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly one for a named database", c.Warnings)
 	}
 }
 

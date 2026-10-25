@@ -7,6 +7,9 @@
 # ./cmd/chipin, then `docker build --build-context .=.` from here — or just
 # run `goreleaser release --snapshot --clean`, which does both steps for
 # every supported platform.
+# Keep this file free of RUN steps: the release builds the linux/arm64 image on an
+# amd64 runner without QEMU (see .github/workflows/release.yml), which only works
+# while nothing needs to execute inside the image.
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:2293b36c7c9082bf4115aab724b4d2cddec82c8eba39bf27ac0517e159acf150
 ARG TARGETPLATFORM
 WORKDIR /app

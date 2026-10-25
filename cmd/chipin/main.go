@@ -2,8 +2,9 @@
 // It runs in one of two modes, selected by the ENVIRONMENT variable (see
 // PLAN.md §1.2 and internal/config):
 //
-//   - ENVIRONMENT=local (default): Socket Mode transport + SQLite storage.
-//     Suited to a single long-running process with outbound-only networking.
+//   - ENVIRONMENT=local (default): Socket Mode transport + a local JSON data
+//     file. Suited to a single long-running process with outbound-only
+//     networking.
 //   - ENVIRONMENT=gcp: HTTP webhook transport + Firestore storage. Suited to
 //     Cloud Run, including scale-to-zero.
 package main
@@ -45,6 +46,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	for _, w := range cfg.Warnings {
+		logger.Println("warning:", w)
+	}
 
 	switch cfg.Environment {
 	case config.EnvGCP:
@@ -64,9 +68,9 @@ func newLinearClient(cfg *config.Config) *linear.Client {
 	return linear.New(cfg.LinearAPIKey)
 }
 
-// runSocket runs Mode A: Socket Mode transport + SQLite storage.
+// runSocket runs Mode A: Socket Mode transport + a local JSON data file.
 func runSocket(cfg *config.Config, logger *log.Logger) error {
-	repo, err := store.NewSQLite(cfg.DBPath)
+	repo, err := store.NewJSONFile(cfg.DBPath)
 	if err != nil {
 		return err
 	}

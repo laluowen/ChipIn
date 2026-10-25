@@ -66,7 +66,7 @@ func (f *Firestore) SaveSession(ctx context.Context, sess *PokerSession) error {
 }
 
 // DeleteSession removes the session for issueID. Deleting a missing session
-// is not an error (matches store.SQLite's behavior).
+// is not an error (matches store.JSONFile's behavior).
 func (f *Firestore) DeleteSession(ctx context.Context, issueID string) error {
 	if _, err := f.doc(issueID).Delete(ctx); err != nil && status.Code(err) != codes.NotFound {
 		return fmt.Errorf("delete session: %w", err)

@@ -1,0 +1,29 @@
+# Slack app manifest for Cloud Run (HTTP). Replace https://YOUR-SERVICE.run.app.
+# Slack treats Socket Mode and HTTP URLs as mutually exclusive: use a separate app per mode.
+# Create the app at https://api.slack.com/apps → "From a manifest", install it → SLACK_BOT_TOKEN (xoxb-);
+# Basic Information → Signing Secret → SLACK_SIGNING_SECRET.
+display_information:
+  name: ChipIn
+  description: Async planning poker for Slack + Linear
+  background_color: "#ff9800"
+features:
+  bot_user:
+    display_name: ChipIn
+    always_online: false
+  slash_commands:
+    - command: /chipin
+      description: Start a planning-poker round for a Linear issue
+      usage_hint: ENG-123
+      url: https://YOUR-SERVICE.run.app/slack/commands
+oauth_config:
+  scopes:
+    bot:
+      - commands
+      - chat:write
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://YOUR-SERVICE.run.app/slack/interactions
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

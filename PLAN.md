@@ -7,7 +7,7 @@ A single, statically compiled Go binary capable of operating in two distinct dep
 ### 1.1 Core Stack
 
 - **Language:** Go (Golang 1.21+)
-- **Base Container Image:** `gcr.io/distroless/static-debian12`
+- **Base Container Image:** `gcr.io/distroless/static-debian13:nonroot`
 - **Slack Integration:** [github.com/slack-go/slack](https://github.com/slack-go/slack)
 - **Linear Integration:** Standard `net/http` client executing raw GraphQL queries.
 
@@ -23,7 +23,7 @@ doesn't know which mode it's running under.
 
     - **Transport:** Outbound WebSockets (`internal/socket`).
 
-    - **State:** Local SQLite database (`store.SQLite`).
+    - **State:** Local JSON data file (`store.JSONFile`).
 - **Mode B: Serverless / Cloud Run (Webhook Mode)** — `ENVIRONMENT=gcp`
 
     - **Transport:** HTTP Webhooks (`internal/webhook`), signature-verified
@@ -43,6 +43,43 @@ doesn't know which mode it's running under.
       order of effort: set `min-instances=1` to kill cold starts, enable
       CPU-always-allocated and move the handler call into a goroutine, or
       defer the real work to a Cloud Tasks queue and a second endpoint.
+
+      **Re-checked (ALIGN-WITH-PROPSY.md §6):** Propsy hit this limit for real
+      — its Home tab refresh needed up to 11 sequential Slack calls on the 3s
+      path, and the fix was to stop refreshing it live rather than add
+      concurrency. ChipIn's handlers don't have an equivalent: the worst case
+      is `HandleSlashCommand` (Linear `FetchIssue`, Slack `PostMessage`, a
+      best-effort `GetPermalink`, one store save — 4 calls) and `finalize`
+      (Linear `SetEstimate`, one store delete, Slack `UpdateMessage` — 3
+      calls), both a single straight-line sequence with no goroutines or
+      deferred work spawned past the response. Nothing changed here; this is
+      a confirmation, not a fix.
+
+### 1.3 Firestore cost (budget)
+
+Firestore's free tier (50k reads / 20k writes per day, 1 GiB — only the `(default)`
+database; `config.Config.Warnings` flags a named `FIRESTORE_DATABASE_ID`, see §4)
+comfortably covers ChipIn's access pattern, which is far lighter than a typical
+multi-user app's: every operation touches exactly one document, the session keyed by
+the Linear issue UUID.
+
+- **Start a round** (`/chipin ENG-123`): 1 write (`SaveSession`).
+- **Cast or retract a vote, reveal, or continue voting**: 1 read + 1 write
+  (`saveAndRender`'s `GetSession` + `SaveSession`) each.
+- **Set the estimate, or cancel**: 1 read + 1 delete (`GetSession` +
+  `DeleteSession`).
+
+A full round with N voters — one start, N votes, one reveal, one set-estimate — costs
+roughly `(N + 2)` reads and `(N + 2)` writes/deletes. For a 10-person team, that's
+~12 reads and ~12 writes per round: the daily free tier covers roughly 4,000 such
+rounds on reads alone and ~1,600 on writes (the tighter bound), i.e. far more
+planning-poker rounds than any one team runs in a day. An idle ChipIn costs $0.
+
+This is deliberately not re-litigating Firestore vs. alternatives (Datastore mode,
+Cloud Storage, SQLite-on-Cloud-Run, Cloud SQL/AlloyDB/Spanner/Bigtable/Memorystore):
+see Propsy's `PLAN.md` §3 for that review, which applies unchanged — ChipIn's access
+pattern is lighter, not differently shaped, so the verdict (Firestore `(default)`
+database) carries over directly.
 
 ## 2. Abstraction Boundaries
 
@@ -83,8 +120,8 @@ type SessionRepository interface {
   `"?"` card — an abstention is simply a missing vote.
 - `Scale` is derived per team from Linear's estimation settings, not hard-coded (see
   §3). A `poker.Point` is `{Label, Value}`: `Label` is what voters see, `Value` is the
-  number written to Linear. The scale is persisted (SQLite `scale` column) so buttons,
-  vote validation, and consensus all use the same points.
+  number written to Linear. The scale is persisted alongside the rest of the session
+  so buttons, vote validation, and consensus all use the same points.
 - Added `IssueURL`, `MessageLink`, and `RequestedBy` for context/attribution — see
   §6.
 - **A DM-based private-notice design (`Notices map[string]Notice`, keyed per user)
@@ -93,14 +130,44 @@ type SessionRepository interface {
   a persisted per-user `{ChannelID, MessageTS}` reference, and stale-reference
   fallback logic — too many moving parts for the win. Reverted to plain
   `chat.postEphemeral` (one new message per vote; Slack has no way to update or
-  dedupe these). The `notices` SQLite column from that design is dropped via
-  migration on databases that already have it (`DROP COLUMN`, supported since
-  SQLite 3.35).
+  dedupe these). (When local storage was still SQLite, the abandoned design's
+  `notices` column was dropped via an `ALTER TABLE ... DROP COLUMN` migration on
+  databases that already had it; `store.JSONFile` has no such column and no
+  migration path at all — see "Local storage" below.)
 - Added `Identifier`, `Title`, and `MessageTS`. `MessageTS` is required to
   `chat.update` the existing message; `Identifier`/`Title` are for display.
-- Added `Close()` so `main` can release the SQLite handle cleanly.
-- The concrete driver is **pure-Go `modernc.org/sqlite`** (`CGO_ENABLED=0`), chosen
-  so the distroless static binary cross-compiles cleanly on free GitHub runners.
+- Added `Close()` so `main` can release the store cleanly (a no-op for
+  `store.JSONFile`, since every write is already on disk by the time it returns;
+  meaningful for `store.Firestore`'s client).
+
+### Local storage: a JSON file (implemented; replaced SQLite)
+
+Firestore is the production store, so SQLite was a second data model to keep in step
+with it. `local` mode runs as one process, so it doesn't need what SQLite is for
+(transactions shared between processes), and its SQL bought nothing the Firestore
+store doesn't already do with a plain map lookup. The driver also added ~6 MB to the
+binary and ~30 `modernc.org` packages; both are gone.
+
+`JSONFile` (`internal/store/jsonfile.go`) keeps every in-progress session in memory,
+mirroring Firestore's `chipin_sessions` collection as a `map[issueID]*PokerSession`.
+`SaveSession`/`DeleteSession` build the new state on a copy of what they touch, save,
+and only then swap it into memory, so a failed save changes nothing. Saving writes a
+temp file, fsyncs it and renames it over the old one, so a crash never leaves a
+partial file. `GetSession` returns a copy (`Votes` and `Scale` are mutable), so
+neither the store nor the caller can reach into the other's memory. Rewriting the
+whole file per save is fine at this app's scale: sessions are short-lived (a session
+is deleted the moment its estimate is set or the round is cancelled), so the file
+never holds more than the currently in-progress rounds.
+
+Limits of the design: one process per file (a second would clobber the first's
+writes; there is no lock, since the portable options are worse than the failure
+they'd prevent), and the default path is `./chipin.json` (`DB_PATH`).
+
+Migration: none. Sessions are short-lived, so there was nothing worth carrying
+forward from the old SQLite store. An old SQLite file at `DB_PATH` is refused with an
+error that says so (recognised by its header) rather than silently ignored or
+overwritten. Handler and webhook tests use an in-memory `JSONFile`.
+
 
 ### 2.2 Transport Boundary (`handler.go`)
 
@@ -185,7 +252,7 @@ behind interfaces so the core stays unit-testable without live services.
 - `SLACK_APP_TOKEN` (xapp-...)
 - `SLACK_BOT_TOKEN` (xoxb-...)
 - `LINEAR_API_KEY` (Linear personal API key)
-- `DB_PATH` (optional; defaults to `./chipin.db`)
+- `DB_PATH` (optional; defaults to `./chipin.json`)
 
 ### For Cloud Run / Webhook Mode (implemented)
 
@@ -307,31 +374,82 @@ this up:
 
 ## 7. Build, Release & CI (implemented)
 
-- **Toolchain** pinned via `mise` (`mise.toml`): Go, `golangci-lint`, GoReleaser, and
-  the `gcloud` CLI (+ Firestore emulator component).
+- **Toolchain** pinned via `mise` (`mise.toml`): Go, `golangci-lint`, GoReleaser, and Java
+  (for the Firestore emulator; see `firestore.sh`).
 - **CI** (`.github/workflows/ci.yml`), on every PR and push to `main`: `golangci-lint`
   (v2, `.golangci.yaml`: gofumpt/gci formatters + errcheck/govet/staticcheck/gosec/
-  revive/…) and `go test ./...` against a real Firestore emulator (started in-job via
-  `google-github-actions/setup-gcloud`'s `cloud-firestore-emulator` component).
+  revive/…) and `go test ./...` against a real Firestore emulator, started in-job by
+  `./firestore.sh` (no `gcloud`: the emulator is just a jar, downloaded directly and
+  verified by sha256 — see "Local storage" §2.1 and `firestore.sh`'s own comments).
 - **Release** (`.github/workflows/release.yml` + `.goreleaser.yaml`), gated on CI
-  passing on `main`:
+  passing on `main`, and built to work with GitHub **immutable releases** (not yet
+  enforced for this repo — `laluowen/ChipIn` is a personal account, and org-level
+  rulesets only apply after the move in §9 — but the pipeline is written to the
+  immutable shape regardless, since it also works fine without it; immutability can
+  optionally be turned on for this repo alone first, under Settings → General →
+  Releases):
   1. [release-please](https://github.com/googleapis/release-please) maintains a
      standing "release PR" from Conventional Commits since the last release (`fix:`
      → patch, `feat:` → minor, `!`/`BREAKING CHANGE:` → major; `chore:`/`docs:`/`ci:`
-     -only changes get no PR). Merging that PR is what cuts a release — tag, GitHub
-     Release, and generated `CHANGELOG.md`.
-  2. GoReleaser then attaches artifacts to that same release (`release.mode:
-     keep-existing` — it doesn't touch release-please's notes): static
-     `CGO_ENABLED=0` binaries for linux/darwin/windows × amd64/arm64, uploaded as raw
-     executables (`archives: formats: [binary]`, named `chipin_<os>_<arch>` — no
-     version in the filename, no tarball/zip wrapper; a single static binary doesn't
-     need one, and the version-free name is friendlier to tools like `mise`/aqua that
-     resolve a fixed filename per release tag) plus `checksums.txt`, and a multi-arch
-     (`linux/amd64` + `linux/arm64`) container image pushed to
-     `ghcr.io/laluowen/chipin`. Because the Go binaries are cross-compiled ahead of
-     time, the image build needs no QEMU-emulated compiler — only `docker buildx`
-     assembling trivial per-arch COPY layers (QEMU is still set up in CI for the
-     arm64 manifest itself).
+     -only changes get no PR). Merging that PR is what cuts a release. Because a
+     published immutable release's assets and tag are frozen, release-please only
+     creates a **draft** release with its tag already pushed
+     (`release-please-config.json`: `"draft": true` plus `"force-tag-creation": true`
+     — without the latter GitHub withholds a draft's tag until publish, so
+     release-please can't see the previous release and proposes a bogus next-major
+     release). `release-please-config.json`/`.release-please-manifest.json` replace
+     the action's old bare `release-type: go` input, and the manifest is pinned at
+     the version current when this pipeline was built (`1.0.2`) so release-please
+     doesn't try to infer a version from the whole history.
+  2. GoReleaser then builds everything, signs it, and uploads it all to that draft
+     (`release.use_existing_draft`), then publishes it (`draft: false`) — only then
+     does the release become immutable. A failure before the publish leaves an
+     unsealed draft: fix it and re-run the failed job (the release-please outputs
+     are reused, so it gets the same tag; `replace_existing_artifacts` covers a
+     partial upload). `release.preflight.fail_on_error` stops the run early if the
+     tag is already published as an immutable release, instead of discovering that
+     after building everything.
+
+  What GoReleaser attaches: static `CGO_ENABLED=0` binaries for linux/darwin/windows
+  × amd64/arm64, uploaded as raw executables (`archives: formats: [binary]`, named
+  `chipin_<os>_<arch>` — no version in the filename, no tarball/zip wrapper; a
+  single static binary doesn't need one, and the version-free name is friendlier to
+  tools like `mise`/aqua that resolve a fixed filename per release tag) plus
+  `checksums.txt`, a multi-arch (`linux/amd64` + `linux/arm64`) container image
+  pushed to `ghcr.io/laluowen/chipin` as an **exact version tag only** (no `latest`,
+  no floating `1`/`1.2` — a moving tag isn't immutable; ghcr has no tag-immutability
+  setting of its own, so this is by convention, backed by the cosign signature
+  below), and per-binary SBOMs (Syft; `sboms: artifacts: binary`, since the default
+  only catalogs archives, and raw binaries aren't "archives" to GoReleaser). Because
+  the Go binaries are cross-compiled ahead of time and the Dockerfile has no `RUN`
+  steps, the image build needs no QEMU-emulated compiler — just `docker buildx`
+  assembling trivial per-arch `COPY` layers on one amd64 runner.
+
+  **Supply chain: keyless signing, no keys or secrets.** Everything GoReleaser
+  produces is signed with [cosign](https://github.com/sigstore/cosign) using
+  Sigstore keyless signing: the release job's GitHub OIDC token is exchanged for a
+  short-lived certificate naming this repo's `release.yml`, and the signature is
+  logged in the public Rekor transparency log. Binaries, `checksums.txt` and the
+  SBOMs each get a `.sigstore.json` bundle (`signs`); the container image is signed
+  by digest (`docker_signs`). Build provenance (SLSA) attestations
+  (`actions/attest`, over `checksums.txt` and the image digests in `digests.txt`)
+  complement the signatures: a signature says who published an artifact, provenance
+  says which workflow run built it from which commit. Verifiable with
+  `cosign verify-blob`/`cosign verify` and `gh attestation verify` — see README
+  "Verifying a release". The release workflow runs on `workflow_run`, so the
+  certificate's workflow ref is the default branch (`…/release.yml@refs/heads/main`),
+  not the tag: verification must match the repo + workflow path by regexp, not pin a
+  ref. Signing/SBOM generation need a GitHub OIDC token, so a local snapshot build
+  uses `goreleaser release --snapshot --clean --skip=sign,sbom` (add `docker` too if
+  the machine has no buildx).
+  - The release job's build cache (`actions/cache`, keyed per commit with
+    restore-keys) is separate from `setup-go`'s: cross-compiling six targets
+    recompiles grpc/protobuf/Firestore once per target (~115 s cold), and
+    `setup-go`'s cache is saved once per `go.sum` from whichever job gets there
+    first (CI's host-only build), so it would never hold the other five targets.
+  - A `Verify CI for release commit` step polls the GitHub API until CI has reported
+    success for the exact commit release-please tagged, before GoReleaser runs —
+    belt-and-braces alongside the `workflow_run: branches: [main]` gate.
 - Every action in both workflows is pinned by commit SHA with a version comment
   (`uses: owner/repo@<sha> # vX.Y.Z`); Renovate's `config:best-practices` preset
   (`helpers:pinGitHubActionDigests`) keeps them updated.

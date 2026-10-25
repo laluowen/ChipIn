@@ -106,7 +106,7 @@ func (f *fakeLinear) SetEstimate(_ context.Context, issueID string, estimate flo
 
 func newTestHandler(t *testing.T, l *fakeLinear) (*PokerHandler, *fakeSlack, store.SessionRepository) {
 	t.Helper()
-	repo, err := store.NewSQLite(":memory:")
+	repo, err := store.NewJSONFile("")
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}

@@ -27,10 +27,8 @@ go.work.sum
 # env file
 .env
 
-# local SQLite database
-*.db
-*.db-shm
-*.db-wal
+# local data (the default DB_PATH, a JSON file)
+chipin.json
 
 # Editor/IDE
 # .idea/
