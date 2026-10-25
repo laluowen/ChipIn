@@ -44,6 +44,43 @@ doesn't know which mode it's running under.
       CPU-always-allocated and move the handler call into a goroutine, or
       defer the real work to a Cloud Tasks queue and a second endpoint.
 
+      **Re-checked (ALIGN-WITH-PROPSY.md §6):** Propsy hit this limit for real
+      — its Home tab refresh needed up to 11 sequential Slack calls on the 3s
+      path, and the fix was to stop refreshing it live rather than add
+      concurrency. ChipIn's handlers don't have an equivalent: the worst case
+      is `HandleSlashCommand` (Linear `FetchIssue`, Slack `PostMessage`, a
+      best-effort `GetPermalink`, one store save — 4 calls) and `finalize`
+      (Linear `SetEstimate`, one store delete, Slack `UpdateMessage` — 3
+      calls), both a single straight-line sequence with no goroutines or
+      deferred work spawned past the response. Nothing changed here; this is
+      a confirmation, not a fix.
+
+### 1.3 Firestore cost (budget)
+
+Firestore's free tier (50k reads / 20k writes per day, 1 GiB — only the `(default)`
+database; `config.Config.Warnings` flags a named `FIRESTORE_DATABASE_ID`, see §4)
+comfortably covers ChipIn's access pattern, which is far lighter than a typical
+multi-user app's: every operation touches exactly one document, the session keyed by
+the Linear issue UUID.
+
+- **Start a round** (`/chipin ENG-123`): 1 write (`SaveSession`).
+- **Cast or retract a vote, reveal, or continue voting**: 1 read + 1 write
+  (`saveAndRender`'s `GetSession` + `SaveSession`) each.
+- **Set the estimate, or cancel**: 1 read + 1 delete (`GetSession` +
+  `DeleteSession`).
+
+A full round with N voters — one start, N votes, one reveal, one set-estimate — costs
+roughly `(N + 2)` reads and `(N + 2)` writes/deletes. For a 10-person team, that's
+~12 reads and ~12 writes per round: the daily free tier covers roughly 4,000 such
+rounds on reads alone and ~1,600 on writes (the tighter bound), i.e. far more
+planning-poker rounds than any one team runs in a day. An idle ChipIn costs $0.
+
+This is deliberately not re-litigating Firestore vs. alternatives (Datastore mode,
+Cloud Storage, SQLite-on-Cloud-Run, Cloud SQL/AlloyDB/Spanner/Bigtable/Memorystore):
+see Propsy's `PLAN.md` §3 for that review, which applies unchanged — ChipIn's access
+pattern is lighter, not differently shaped, so the verdict (Firestore `(default)`
+database) carries over directly.
+
 ## 2. Abstraction Boundaries
 
 To decouple the core poker logic from the infrastructure, we define interfaces for both State and Transport.
