@@ -3,6 +3,7 @@
   "extends": [
     "config:best-practices"
   ],
+  "dependencyDashboardApproval": false,
   "customDatasources": {
     "firestoreEmulator": {
       "defaultRegistryUrlTemplate": "https://cdn.jsdelivr.net/npm/firebase-tools@latest/lib/emulator/downloadableEmulatorInfo.json",
