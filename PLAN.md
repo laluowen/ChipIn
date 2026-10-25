@@ -7,7 +7,7 @@ A single, statically compiled Go binary capable of operating in two distinct dep
 ### 1.1 Core Stack
 
 - **Language:** Go (Golang 1.21+)
-- **Base Container Image:** `gcr.io/distroless/static-debian12`
+- **Base Container Image:** `gcr.io/distroless/static-debian13:nonroot`
 - **Slack Integration:** [github.com/slack-go/slack](https://github.com/slack-go/slack)
 - **Linear Integration:** Standard `net/http` client executing raw GraphQL queries.
 

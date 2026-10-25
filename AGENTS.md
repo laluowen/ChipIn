@@ -72,8 +72,8 @@ that runs in either of two modes, selected by `ENVIRONMENT` (`local` | `gcp`):
   from the team's `issueEstimationType` / `issueEstimationExtended` /
   `issueEstimationAllowZero` (fetched in `linear.FetchIssue`). A `poker.Point` has a
   display `Label` ("5" or "M") and a numeric `Value` written to Linear. T-shirt sizes
-  map to Fibonacci numbers. The scale is persisted on the session (SQLite `scale`
-  column) so buttons, validation, and consensus all agree. There is no hard-coded
+  map to Fibonacci numbers. The scale is persisted on the session itself so buttons,
+  validation, and consensus all agree. There is no hard-coded
   scale and no `"?"` card — an abstention is just a missing vote.
 - **Consensus is the mode, not the median.** `Scale.Consensus` picks the most-voted
   point, so the suggestion is always a value someone actually cast — a median can

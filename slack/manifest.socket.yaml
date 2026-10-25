@@ -1,0 +1,27 @@
+# Slack app manifest for local development over Socket Mode.
+# Create the app at https://api.slack.com/apps → "From a manifest", then:
+#   - Install to workspace → SLACK_BOT_TOKEN (xoxb-)
+#   - Basic Information → App-Level Tokens → scope connections:write → SLACK_APP_TOKEN (xapp-)
+display_information:
+  name: ChipIn
+  description: Async planning poker for Slack + Linear
+  background_color: "#ff9800"
+features:
+  bot_user:
+    display_name: ChipIn
+    always_online: false
+  slash_commands:
+    - command: /chipin
+      description: Start a planning-poker round for a Linear issue
+      usage_hint: ENG-123
+oauth_config:
+  scopes:
+    bot:
+      - commands
+      - chat:write
+settings:
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

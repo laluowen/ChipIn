@@ -64,10 +64,15 @@ goreleaser release --snapshot --clean   # binaries + a locally-tagged image, no 
 
 Both modes start the same way, at <https://api.slack.com/apps>:
 
-- Create an app.
-- **OAuth & Permissions** → bot token scopes: `commands`, `chat:write`.
-- **Slash Commands** → add `/chipin`.
-- **Interactivity & Shortcuts** → turn it on.
+- Create an app — fastest from a manifest:
+  [`slack/manifest.socket.yaml`](./slack/manifest.socket.yaml) for Mode A,
+  [`slack/manifest.http.yaml`](./slack/manifest.http.yaml) for Mode B (replace its
+  placeholder `https://YOUR-SERVICE.run.app` with your Cloud Run URL once you have
+  one). Manifests already set the bot scopes, slash command, and interactivity
+  below, so skip straight to installing. Starting from scratch instead:
+  - **OAuth & Permissions** → bot token scopes: `commands`, `chat:write`.
+  - **Slash Commands** → add `/chipin`.
+  - **Interactivity & Shortcuts** → turn it on.
 - Install the app to your workspace → note the bot token (`xoxb-...`).
 
 Where the two modes diverge is how Slack actually reaches ChipIn:
