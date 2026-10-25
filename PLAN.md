@@ -337,12 +337,13 @@ this up:
 
 ## 7. Build, Release & CI (implemented)
 
-- **Toolchain** pinned via `mise` (`mise.toml`): Go, `golangci-lint`, GoReleaser, and
-  the `gcloud` CLI (+ Firestore emulator component).
+- **Toolchain** pinned via `mise` (`mise.toml`): Go, `golangci-lint`, GoReleaser, and Java
+  (for the Firestore emulator; see `firestore.sh`).
 - **CI** (`.github/workflows/ci.yml`), on every PR and push to `main`: `golangci-lint`
   (v2, `.golangci.yaml`: gofumpt/gci formatters + errcheck/govet/staticcheck/gosec/
-  revive/…) and `go test ./...` against a real Firestore emulator (started in-job via
-  `google-github-actions/setup-gcloud`'s `cloud-firestore-emulator` component).
+  revive/…) and `go test ./...` against a real Firestore emulator, started in-job by
+  `./firestore.sh` (no `gcloud`: the emulator is just a jar, downloaded directly and
+  verified by sha256 — see "Local storage" §2.1 and `firestore.sh`'s own comments).
 - **Release** (`.github/workflows/release.yml` + `.goreleaser.yaml`), gated on CI
   passing on `main`:
   1. [release-please](https://github.com/googleapis/release-please) maintains a

@@ -2,5 +2,27 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:best-practices"
+  ],
+  "customDatasources": {
+    "firestoreEmulator": {
+      "defaultRegistryUrlTemplate": "https://cdn.jsdelivr.net/npm/firebase-tools@latest/lib/emulator/downloadableEmulatorInfo.json",
+      "format": "json",
+      "transformTemplates": [
+        "{ \"releases\": [{ \"version\": firestore.version, \"digest\": firestore.expectedChecksumSHA256 }], \"sourceUrl\": \"https://github.com/firebase/firebase-tools\" }"
+      ]
+    }
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The Firestore emulator jar pinned in firestore.sh (version and sha256)",
+      "managerFilePatterns": ["/^firestore\\.sh$/"],
+      "matchStrings": [
+        "EMULATOR_VERSION=\"(?<currentValue>[^\"]+)\"\\nEMULATOR_SHA256=\"(?<currentDigest>[a-f0-9]+)\""
+      ],
+      "datasourceTemplate": "custom.firestoreEmulator",
+      "depNameTemplate": "firestore-emulator",
+      "versioningTemplate": "semver-coerced"
+    }
   ]
 }

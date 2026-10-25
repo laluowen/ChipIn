@@ -14,6 +14,7 @@ on:
       - "go.sum"
       - ".golangci.yaml"
       - ".github/workflows/ci.yml"
+      - "firestore.sh"
   push:
     branches: [main]
 
@@ -48,25 +49,19 @@ jobs:
           distribution: corretto
           java-version: "25"
 
-      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-        with:
-          install_components: cloud-firestore-emulator
-
-      # Started on a fixed host:port (same convention as ./firestore.sh for
-      # local dev) so FIRESTORE_EMULATOR_HOST in the test step always points
-      # at something real. internal/store's Firestore tests skip themselves
-      # when this var is unset, but here it must be set *and* correct.
+      # The emulator is just a jar run by `java`, so there's no gcloud here:
+      # ./firestore.sh downloads the pinned jar (checking its sha256) and starts
+      # it, the same way it does for local dev. internal/store's Firestore tests
+      # skip themselves when FIRESTORE_EMULATOR_HOST is unset, but here it must
+      # be set *and* correct, so hand it on to the next step.
       - name: Start Firestore emulator
         run: |
-          gcloud emulators firestore start --host-port=127.0.0.1:8219 \
-            > /tmp/firestore-emulator.log 2>&1 &
-          timeout 30 bash -c 'until echo > /dev/tcp/127.0.0.1/8219; do sleep 1; done'
+          source ./firestore.sh start
+          echo "FIRESTORE_EMULATOR_HOST=${FIRESTORE_EMULATOR_HOST}" >> "$GITHUB_ENV"
 
       - name: go test ./...
         run: go test ./...
-        env:
-          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8219
 
       - name: Firestore emulator log
         if: failure()
-        run: cat /tmp/firestore-emulator.log
+        run: cat "${TMPDIR:-/tmp}/chipin-firestore-emulator.log"

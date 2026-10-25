@@ -245,7 +245,7 @@ go test ./...          # unit tests; no live Slack/Linear/Firestore needed
 golangci-lint run
 ```
 
-Firestore-backed tests (`internal/store/firestore_test.go`) are gated behind
+Firestore-backed tests (`internal/store/store_test.go`) are gated behind
 `FIRESTORE_EMULATOR_HOST` and auto-skip when it's unset. To actually exercise them,
 start the bundled emulator wrapper first — it's a `source`d script because it needs to
 set/unset `FIRESTORE_EMULATOR_HOST` in *your* shell, not a subshell that evaporates:
@@ -256,7 +256,8 @@ go test ./internal/store/... -run Firestore -v
 source ./firestore.sh stop
 ```
 
-Requires the Firestore emulator component: `gcloud components install
-cloud-firestore-emulator`.
+`firestore.sh` downloads the pinned emulator jar itself (checking its sha256) and
+runs it with `java` — no `gcloud` needed. It stops itself after 3 hours
+(`FIRESTORE_EMULATOR_TTL`).
 
 See [`AGENTS.md`](./AGENTS.md) for architecture notes and design decisions.
