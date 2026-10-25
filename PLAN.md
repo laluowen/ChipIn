@@ -345,24 +345,74 @@ this up:
   `./firestore.sh` (no `gcloud`: the emulator is just a jar, downloaded directly and
   verified by sha256 — see "Local storage" §2.1 and `firestore.sh`'s own comments).
 - **Release** (`.github/workflows/release.yml` + `.goreleaser.yaml`), gated on CI
-  passing on `main`:
+  passing on `main`, and built to work with GitHub **immutable releases** (not yet
+  enforced for this repo — `laluowen/ChipIn` is a personal account, and org-level
+  rulesets only apply after the move in §9 — but the pipeline is written to the
+  immutable shape regardless, since it also works fine without it; immutability can
+  optionally be turned on for this repo alone first, under Settings → General →
+  Releases):
   1. [release-please](https://github.com/googleapis/release-please) maintains a
      standing "release PR" from Conventional Commits since the last release (`fix:`
      → patch, `feat:` → minor, `!`/`BREAKING CHANGE:` → major; `chore:`/`docs:`/`ci:`
-     -only changes get no PR). Merging that PR is what cuts a release — tag, GitHub
-     Release, and generated `CHANGELOG.md`.
-  2. GoReleaser then attaches artifacts to that same release (`release.mode:
-     keep-existing` — it doesn't touch release-please's notes): static
-     `CGO_ENABLED=0` binaries for linux/darwin/windows × amd64/arm64, uploaded as raw
-     executables (`archives: formats: [binary]`, named `chipin_<os>_<arch>` — no
-     version in the filename, no tarball/zip wrapper; a single static binary doesn't
-     need one, and the version-free name is friendlier to tools like `mise`/aqua that
-     resolve a fixed filename per release tag) plus `checksums.txt`, and a multi-arch
-     (`linux/amd64` + `linux/arm64`) container image pushed to
-     `ghcr.io/laluowen/chipin`. Because the Go binaries are cross-compiled ahead of
-     time, the image build needs no QEMU-emulated compiler — only `docker buildx`
-     assembling trivial per-arch COPY layers (QEMU is still set up in CI for the
-     arm64 manifest itself).
+     -only changes get no PR). Merging that PR is what cuts a release. Because a
+     published immutable release's assets and tag are frozen, release-please only
+     creates a **draft** release with its tag already pushed
+     (`release-please-config.json`: `"draft": true` plus `"force-tag-creation": true`
+     — without the latter GitHub withholds a draft's tag until publish, so
+     release-please can't see the previous release and proposes a bogus next-major
+     release). `release-please-config.json`/`.release-please-manifest.json` replace
+     the action's old bare `release-type: go` input, and the manifest is pinned at
+     the version current when this pipeline was built (`1.0.2`) so release-please
+     doesn't try to infer a version from the whole history.
+  2. GoReleaser then builds everything, signs it, and uploads it all to that draft
+     (`release.use_existing_draft`), then publishes it (`draft: false`) — only then
+     does the release become immutable. A failure before the publish leaves an
+     unsealed draft: fix it and re-run the failed job (the release-please outputs
+     are reused, so it gets the same tag; `replace_existing_artifacts` covers a
+     partial upload). `release.preflight.fail_on_error` stops the run early if the
+     tag is already published as an immutable release, instead of discovering that
+     after building everything.
+
+  What GoReleaser attaches: static `CGO_ENABLED=0` binaries for linux/darwin/windows
+  × amd64/arm64, uploaded as raw executables (`archives: formats: [binary]`, named
+  `chipin_<os>_<arch>` — no version in the filename, no tarball/zip wrapper; a
+  single static binary doesn't need one, and the version-free name is friendlier to
+  tools like `mise`/aqua that resolve a fixed filename per release tag) plus
+  `checksums.txt`, a multi-arch (`linux/amd64` + `linux/arm64`) container image
+  pushed to `ghcr.io/laluowen/chipin` as an **exact version tag only** (no `latest`,
+  no floating `1`/`1.2` — a moving tag isn't immutable; ghcr has no tag-immutability
+  setting of its own, so this is by convention, backed by the cosign signature
+  below), and per-binary SBOMs (Syft; `sboms: artifacts: binary`, since the default
+  only catalogs archives, and raw binaries aren't "archives" to GoReleaser). Because
+  the Go binaries are cross-compiled ahead of time and the Dockerfile has no `RUN`
+  steps, the image build needs no QEMU-emulated compiler — just `docker buildx`
+  assembling trivial per-arch `COPY` layers on one amd64 runner.
+
+  **Supply chain: keyless signing, no keys or secrets.** Everything GoReleaser
+  produces is signed with [cosign](https://github.com/sigstore/cosign) using
+  Sigstore keyless signing: the release job's GitHub OIDC token is exchanged for a
+  short-lived certificate naming this repo's `release.yml`, and the signature is
+  logged in the public Rekor transparency log. Binaries, `checksums.txt` and the
+  SBOMs each get a `.sigstore.json` bundle (`signs`); the container image is signed
+  by digest (`docker_signs`). Build provenance (SLSA) attestations
+  (`actions/attest`, over `checksums.txt` and the image digests in `digests.txt`)
+  complement the signatures: a signature says who published an artifact, provenance
+  says which workflow run built it from which commit. Verifiable with
+  `cosign verify-blob`/`cosign verify` and `gh attestation verify` — see README
+  "Verifying a release". The release workflow runs on `workflow_run`, so the
+  certificate's workflow ref is the default branch (`…/release.yml@refs/heads/main`),
+  not the tag: verification must match the repo + workflow path by regexp, not pin a
+  ref. Signing/SBOM generation need a GitHub OIDC token, so a local snapshot build
+  uses `goreleaser release --snapshot --clean --skip=sign,sbom` (add `docker` too if
+  the machine has no buildx).
+  - The release job's build cache (`actions/cache`, keyed per commit with
+    restore-keys) is separate from `setup-go`'s: cross-compiling six targets
+    recompiles grpc/protobuf/Firestore once per target (~115 s cold), and
+    `setup-go`'s cache is saved once per `go.sum` from whichever job gets there
+    first (CI's host-only build), so it would never hold the other five targets.
+  - A `Verify CI for release commit` step polls the GitHub API until CI has reported
+    success for the exact commit release-please tagged, before GoReleaser runs —
+    belt-and-braces alongside the `workflow_run: branches: [main]` gate.
 - Every action in both workflows is pinned by commit SHA with a version comment
   (`uses: owner/repo@<sha> # vX.Y.Z`); Renovate's `config:best-practices` preset
   (`helpers:pinGitHubActionDigests`) keeps them updated.
