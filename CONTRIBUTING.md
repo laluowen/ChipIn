@@ -31,14 +31,14 @@ real Slack workspace, see the README (Socket Mode needs no public URL).
 
 ## AI-assisted commits (optional)
 
-If you use a coding agent, we'd like commits it makes to say so: add an `Assisted-by:` trailer
+If you use a coding agent, we'd like commits it makes to say so: add a `Co-authored-by:` trailer
 naming the tool and the model, for example
 
 ```
-Assisted-by: OpenCode v2.1.1 (github-copilot/claude-sonnet-5.5)
+Co-authored-by: OpenCode v2.1.1 (github-copilot/claude-sonnet-5.5) <noreply@example.com>
 ```
 
-You can type that by hand, but a git alias makes it automatic, and lets you give agents their own
+You can type that by hand, but a small script makes it automatic, and lets you give agents their own
 signing key. That's useful when your normal signing key needs you present (a hardware key, or an
 SSH agent that asks for approval on every use), since a commit the agent makes would otherwise stop
 and wait for you.
@@ -52,12 +52,19 @@ and wait for you.
    ssh-keygen -t ed25519 -N "" -C "agent signing key" -f ~/.ssh/agent-signing-ed25519
    ```
 
-2. Add a global alias. This one signs with that key and adds the trailer, taking the tool version
-   from `opencode --version` and the model from the `AGENT_MODEL` environment variable. Adapt the
-   tool name and version lookup for your agent.
+2. Install a `git agent-commit` command. It signs with that key and adds the trailer, taking the tool
+   version from `opencode --version` and the model from the `AGENT_MODEL` environment variable. Put it
+   on your `PATH` as `git-agent-commit`, and adapt the tool name and version lookup for your agent:
 
    ```sh
-   git config --global alias.agent-commit '!f() { v="${AGENT_VERSION:-$(opencode --version 2>/dev/null | head -1)}"; v="${v#opencode }"; git -c gpg.format=ssh -c gpg.ssh.program=ssh-keygen -c user.signingkey="$HOME/.ssh/agent-signing-ed25519" -c commit.gpgsign=true commit --trailer "Assisted-by: OpenCode ${v:-unknown version} (${AGENT_MODEL:-unknown model})" "$@"; }; f'
+   #!/bin/sh
+   # git-agent-commit: git commit, signed with the agent key, with a Co-authored-by trailer.
+   set -eu
+   version=${AGENT_VERSION:-$(opencode --version 2>/dev/null | head -1)}
+   version=${version#opencode }
+   exec git -c gpg.format=ssh -c gpg.ssh.program=ssh-keygen \
+     -c user.signingkey="$HOME/.ssh/agent-signing-ed25519" -c commit.gpgsign=true \
+     commit --trailer "Co-authored-by: OpenCode ${version:-unknown version} (${AGENT_MODEL:-unknown model}) <noreply@example.com>" "$@"
    ```
 
 3. Have the agent commit with it, naming the model it's running as:
