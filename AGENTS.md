@@ -114,7 +114,7 @@ Enable Socket Mode, add a `/chipin` slash command, and enable Interactivity.
 
 ## Committing (agents)
 
-This assumes the owner has a git alias `agent-commit` configured (see CONTRIBUTING.md, "AI-assisted
+This assumes the owner has a `git-agent-commit` script on the PATH (see CONTRIBUTING.md, "AI-assisted
 commits"). Commit with it, not plain `git commit`, setting the model on every commit:
 
 ```sh
@@ -122,8 +122,8 @@ AGENT_MODEL="<provider>/<model>" git agent-commit -m "type(scope): subject"
 ```
 
 `AGENT_MODEL` is the model you're actually running as (provider/model ID, as in your system
-prompt's model info). The alias takes the same arguments as `git commit`, signs with a dedicated
-agent key, and adds an `Assisted-by: OpenCode <version> (<model>)` trailer. If the alias is missing,
+prompt's model info). The script takes the same arguments as `git commit`, signs with a dedicated
+agent key, and adds a `Co-authored-by: OpenCode <version> (<model>) <noreply@…>` trailer. If the script is missing,
 don't fall back to plain `git commit` (signing may need the owner to touch a hardware key); ask.
 
 If a `gh` remote exists, fetch and push through it rather than `origin`. Only commit or push when
